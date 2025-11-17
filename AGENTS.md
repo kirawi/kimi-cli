@@ -154,6 +154,7 @@ Selected ruff rules:
 
 - **Bash**: Execute shell commands
 - **ReadFile**: Read file contents with line limits
+- **ListDirectory**: List directory contents with object limits
 - **WriteFile**: Write content to files
 - **Glob**: File pattern matching
 - **Grep**: Content searching with regex

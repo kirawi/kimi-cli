@@ -82,6 +82,7 @@ class Params(BaseModel):
         description="Case insensitive search (the `-i` option).",
         default=False,
     )
+
     type: str | None = Field(
         description=(
             "File type to search. Examples: py, rust, js, ts, go, java, etc. "
