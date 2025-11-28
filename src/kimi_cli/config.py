@@ -23,6 +23,8 @@ class LLMProvider(BaseModel):
     """API key"""
     custom_headers: dict[str, str] | None = None
     """Custom headers to include in API requests"""
+    reasoning_key: str | None = None
+    """Custom field key for reasoning content in OpenAI-compatible APIs"""
 
     @field_serializer("api_key", when_used="json")
     def dump_secret(self, v: SecretStr):
