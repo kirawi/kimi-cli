@@ -9,6 +9,32 @@ Internal builds may append content to the Unreleased section.
 Only write entries that are worth mentioning to users.
 -->
 
+## [0.63] - 2025-12-12
+
+- Tool: Fix `FetchURL` tool incorrect output when fetching via service fails
+- Tool: Use `bash` instead of `sh` in `Shell` tool for better compatibility
+- Tool: Fix `Grep` tool unicode decoding error on Windows
+- ACP: Support ACP session continuation (list/load sessions) with `kimi acp` subcommand
+- Lib: Add `Session.find` and `Session.list` static methods to find and list sessions
+- ACP: Update agent plans on the client side when `SetTodoList` tool is called
+- UI: Prevent normal messages starting with `/` from being treated as meta commands
+
+## [0.62] - 2025-12-08
+
+- ACP: Fix tool results (including Shell tool output) not being displayed in ACP clients like Zed
+- ACP: Fix compatibility with the latest version of Zed IDE (0.215.3)
+- Tool: Use PowerShell instead of CMD on Windows for better usability
+- Core: Fix startup crash when there is broken symbolic link in the working directory
+- Core: Add builtin `okabe` agent file with `SendDMail` tool enabled
+- CLI: Add `--agent` option to specify builtin agents like `default` and `okabe`
+- Core: Improve compaction logic to better preserve relevant information
+
+## [0.61] - 2025-12-04
+
+- Lib: Fix logging when used as a library
+- Tool: Harden file path check to protect against shared-prefix escape
+- LLM: Improve compatibility with some third-party OpenAI Responses and Anthropic API providers
+
 ## [0.60] - 2025-12-01
 
 - LLM: Fix interleaved thinking for Kimi and OpenAI-compatible providers

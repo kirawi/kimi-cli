@@ -2,9 +2,9 @@ import json
 from typing import cast
 
 import streamingjson  # pyright: ignore[reportMissingTypeStubs]
+from kaos.path import KaosPath
 from kosong.utils.typing import JsonType
 
-from kaos.path import KaosPath
 from kimi_cli.utils.string import shorten_middle
 
 
@@ -36,7 +36,7 @@ def extract_key_argument(json_content: str | streamingjson.Lexer, tool_name: str
                 return None
             key_argument = str(curr_args["name"])
         case "SendDMail":
-            return "El Psy Kongroo"
+            return None
         case "Think":
             if not isinstance(curr_args, dict) or not curr_args.get("thought"):
                 return None

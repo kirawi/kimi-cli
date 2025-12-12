@@ -6,14 +6,14 @@ import platform
 
 import pytest
 from inline_snapshot import snapshot
+from kaos.path import KaosPath
 from kosong.tooling import ToolError, ToolOk
 
-from kaos.path import KaosPath
 from kimi_cli.tools.shell import Params, Shell
 from kimi_cli.tools.utils import DEFAULT_MAX_CHARS
 
 pytestmark = pytest.mark.skipif(
-    platform.system() == "Windows", reason="Shell tool tests are disabled on Windows."
+    platform.system() == "Windows", reason="Bash tests run only on non-Windows."
 )
 
 
