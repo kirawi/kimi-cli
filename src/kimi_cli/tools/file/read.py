@@ -17,24 +17,25 @@ MAX_BYTES = 100 << 10  # 100KB
 class Params(BaseModel):
     path: str = Field(
         description=(
-            "The path to the file to read. Absolute paths are required when reading files "
-            "outside the working directory."
+            "The path of the file to read. For files above the current working directory, you **must** use absolute paths."
         )
     )
     line_offset: int = Field(
         description=(
-            "The line number to start reading from. "
-            "By default read from the beginning of the file. "
-            "Set this when the file is too large to read at once."
+            "Optional: The 1-indexed line number to start reading from. "
+            "By default, it is set to `1` to read from the beginning of the file. "
+            "Set this value when the file is too large to read at once."
+            "Use with `n_lines` for paginating through large files."
         ),
         default=1,
         ge=1,
     )
     n_lines: int = Field(
         description=(
-            "The number of lines to read. "
-            f"By default read up to {MAX_LINES} lines, which is the max allowed value. "
-            "Set this value when the file is too large to read at once."
+            "Optional: The maximum number of lines to read. "
+            f"By default, it will read up to a maximum of {MAX_LINES} lines. "
+            "Set this value when the file is too large to read at once. "
+            "Use with `line_offset` for paginating through large files."
         ),
         default=MAX_LINES,
         ge=1,
@@ -66,11 +67,11 @@ class ReadFile(CallableTool2[Params]):
             # Outside files can only be read with absolute paths
             return ToolError(
                 message=(
-                    f"`{path}` is not an absolute path. "
+                    f"`{path}` points to a file above the working directory but it is not an absolute path. "
                     "You must provide an absolute path to read a file "
-                    "outside the working directory."
+                    "above the current working directory."
                 ),
-                brief="Invalid path",
+                brief="Used a relative path to a file outside CWD",
             )
         return None
 
@@ -105,10 +106,10 @@ class ReadFile(CallableTool2[Params]):
             if not file_seems_readable(p):
                 return ToolError(
                     message=(
-                        f"`{params.path}` seems not readable. "
+                        f"`{params.path}` may not be a readable text file. "
                         "You may need to read it with proper shell commands, Python tools "
                         "or MCP tools if available. "
-                        "If you read/operate it with Python, you MUST ensure that any "
+                        "If you read/operate it with Python, you **MUST** ensure that any "
                         "third-party packages are installed in a virtual environment (venv)."
                     ),
                     brief="File not readable",
@@ -149,6 +150,29 @@ class ReadFile(CallableTool2[Params]):
                 # Use 6-digit line number width, right-aligned, with tab separator
                 lines_with_no.append(f"{line_num:6d}\t{line}")
 
+            # Determine truncation status
+            # If we hit max lines, max bytes, or exactly the requested n_lines, we assume truncation/pagination is needed
+            is_truncated = max_lines_reached or max_bytes_reached or (len(lines) == params.n_lines)
+
+            content_str = "".join(lines_with_no)
+
+            if is_truncated and lines:
+                start = params.line_offset
+                end = params.line_offset + len(lines) - 1
+                next_offset = end + 1
+
+                header = (
+                    "\nIMPORTANT: The file content is possibly truncated.\n"
+                    f"Status: Showing lines {start}-{end}.\n"
+                    "Action: To try to read more of the file, you can use the 'line_offset' and 'n_lines' "
+                    "parameters in a subsequent 'ReadFile' call. "
+                    f"For example, to read the next section of the file, use line_offset={next_offset}.\n\n"
+                    "--- FILE CONTENT (possibly truncated) ---\n"
+                )
+                output_str = header + content_str
+            else:
+                output_str = content_str
+
             message = (
                 f"{len(lines)} lines read from file starting from line {params.line_offset}."
                 if len(lines) > 0
@@ -163,7 +187,7 @@ class ReadFile(CallableTool2[Params]):
             if truncated_line_numbers:
                 message += f" Lines {truncated_line_numbers} were truncated."
             return ToolOk(
-                output="".join(lines_with_no),  # lines already contain \n, just join them
+                output=output_str,  # lines already contain \n, just join them
                 message=message,
             )
         except Exception as e:

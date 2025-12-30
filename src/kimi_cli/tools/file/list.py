@@ -1,3 +1,4 @@
+from kaos.path import KaosPath
 from pathlib import Path
 from typing import override
 
@@ -19,23 +20,24 @@ from pydantic import BaseModel, Field
 
 from kimi_cli.soul.agent import BuiltinSystemPromptArgs
 from kimi_cli.tools.utils import load_desc, truncate_line
+from kimi_cli.utils.path import is_within_directory
 
 MAX_FD = 1000
 IS_WINDOWS = os.name == 'nt'
 
 class Params(BaseModel):
-    path: str = Field(description="The absolute path of the directory to list")
+    path: str = Field(description="The path of the directory to list. For directories outside of the current working directory, you **must** use absolute paths.")
     n_lines: int = Field(
         description=(
-            "The number of file descriptors to list. "
-            f"By default, read up to {MAX_FD} file descriptors, which is the max allowed value."
+            "Optional: The maximum number of file descriptors to list. "
+            f"By default, it will show up to `{MAX_FD}` file descriptors."
         ),
         default=MAX_FD,
         ge=1,
     )
 
-class ListDirectory(CallableTool2[Params]):
-    name: str = "ListDirectory"
+class ReadDirectory(CallableTool2[Params]):
+    name: str = "ReadDirectory"
     description: str = load_desc(
         Path(__file__).parent / "list.md",
         {
@@ -53,13 +55,25 @@ class ListDirectory(CallableTool2[Params]):
         try:
             p = Path(params.path)
 
-            if not p.is_absolute():
+            # Validate that the path is safe to read
+            # Check for path traversal attempts
+            try:
+                resolved_path = p.resolve()
+            except Exception:
+                # If resolution fails (e.g. path too long), fall back to checking absolute directly
+                resolved_path = p
+
+            resolved_path = KaosPath.unsafe_from_local_path(resolved_path)
+
+            if not is_within_directory(resolved_path, self._work_dir) and not p.is_absolute():
+                # Outside directories can only be read with absolute paths
                 return ToolError(
                     message=(
-                        f"`{params.path}` is not an absolute path. "
-                        "You must provide an absolute path to list a directory."
+                        f"`{params.path}` points to a directory above the working directory but it is not an absolute path. "
+                        "You must provide an absolute path to list a directory "
+                        "above the current working directory."
                     ),
-                    brief="Invalid path",
+                    brief="Used a relative path to a directory outside CWD",
                 )
 
             if not p.exists():
@@ -104,7 +118,7 @@ class ListDirectory(CallableTool2[Params]):
                 size = stats.st_size
                 mtime = datetime.fromtimestamp(stats.st_mtime)
                 time_str = mtime.strftime('%b %d %H:%M')
-                
+
                 name = entry
                 if entry_p.is_dir():
                     name += "/"
@@ -127,7 +141,7 @@ class ListDirectory(CallableTool2[Params]):
                         type_str = "<DIR>"
                     elif entry_p.is_symlink():
                         type_str = "<LNK>"
-                    
+
                     output_entries.append(
                         f"{type_str:<6} {size:>12} {time_str:<12} {name}\n"
                     )
@@ -155,7 +169,7 @@ class ListDirectory(CallableTool2[Params]):
                         group = entry_p.group()
                     except (KeyError, AttributeError, ImportError):
                         # Fallback for systems where owner/group fails or modules missing
-                        user = stats.st_uid 
+                        user = stats.st_uid
                         group = stats.st_gid
 
                     output_entries.append(

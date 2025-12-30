@@ -51,11 +51,11 @@ def extract_key_argument(json_content: str | streamingjson.Lexer, tool_name: str
             if not isinstance(curr_args, dict) or not curr_args.get("path"):
                 return None
             key_argument = _normalize_path(str(curr_args["path"]))
-        case "ListDirectory":
+        case "ReadDirectory":
             if not isinstance(curr_args, dict) or not curr_args.get("path"):
                 return None
             key_argument = _normalize_path(str(curr_args["path"]))
-        case "Glob":
+        case "FindFiles":
             if not isinstance(curr_args, dict) or not curr_args.get("pattern"):
                 return None
             key_argument = str(curr_args["pattern"])

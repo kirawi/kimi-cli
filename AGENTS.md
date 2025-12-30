@@ -245,6 +245,7 @@ This ensures that all dependencies are properly managed and isolated within the 
 
 - **Shell**: Execute shell commands
 - **ReadFile**: Read file contents with line limits
+- **ReadDirectory**: List files contained in directories
 - **WriteFile**: Write content to files
 - **Glob**: File pattern matching
 - **Grep**: Content searching with regex

@@ -1,4 +1,4 @@
-"""Glob tool implementation."""
+"""FindFiles tool implementation."""
 
 from pathlib import Path
 from typing import override
@@ -15,10 +15,10 @@ MAX_MATCHES = 1000
 
 
 class Params(BaseModel):
-    pattern: str = Field(description=("Glob pattern to match files/directories."))
+    pattern: str = Field(description=("Efficiently finds files matching specific glob patterns (i.e. `src/**/*.ts`, `**.md`), returning paths sorted by modification time (newest first). Returns relative paths for files within the working directory, or absolute paths for files outside. Ideal for quickly locating files based on their name or path structure, especially in large codebases."))
     directory: str | None = Field(
         description=(
-            "Absolute path to the directory to search in (defaults to working directory)."
+            "Optional: Absolute path to the directory to search in. Defaults to working directory."
         ),
         default=None,
     )
@@ -29,7 +29,7 @@ class Params(BaseModel):
 
 
 class Glob(CallableTool2[Params]):
-    name: str = "Glob"
+    name: str = "FindFiles"
     description: str = load_desc(
         Path(__file__).parent / "glob.md",
         {
@@ -41,23 +41,6 @@ class Glob(CallableTool2[Params]):
     def __init__(self, builtin_args: BuiltinSystemPromptArgs) -> None:
         super().__init__()
         self._work_dir = builtin_args.KIMI_WORK_DIR
-
-    async def _validate_pattern(self, pattern: str) -> ToolError | None:
-        """Validate that the pattern is safe to use."""
-        if pattern.startswith("**"):
-            ls_result = await list_directory(self._work_dir)
-            return ToolError(
-                output=ls_result,
-                message=(
-                    f"Pattern `{pattern}` starts with '**' which is not allowed. "
-                    "This would recursively search all directories and may include large "
-                    "directories like `node_modules`. Use more specific patterns instead. "
-                    "For your convenience, a list of all files and directories in the "
-                    "top level of the working directory is provided below."
-                ),
-                brief="Unsafe pattern",
-            )
-        return None
 
     async def _validate_directory(self, directory: KaosPath) -> ToolError | None:
         """Validate that the directory is safe to search."""
@@ -77,17 +60,12 @@ class Glob(CallableTool2[Params]):
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
         try:
-            # Validate pattern safety
-            pattern_error = await self._validate_pattern(params.pattern)
-            if pattern_error:
-                return pattern_error
-
             dir_path = KaosPath(params.directory) if params.directory else self._work_dir
 
             if not dir_path.is_absolute():
                 return ToolError(
                     message=(
-                        f"`{params.directory}` is not an absolute path. "
+                        f"`{dir_path}` is not an absolute path. "
                         "You must provide an absolute path to search."
                     ),
                     brief="Invalid directory",
@@ -100,12 +78,12 @@ class Glob(CallableTool2[Params]):
 
             if not await dir_path.exists():
                 return ToolError(
-                    message=f"`{params.directory}` does not exist.",
+                    message=f"`{dir_path}` does not exist.",
                     brief="Directory not found",
                 )
             if not await dir_path.is_dir():
                 return ToolError(
-                    message=f"`{params.directory}` is not a directory.",
+                    message=f"`{dir_path}` is not a directory.",
                     brief="Invalid directory",
                 )
 
@@ -118,8 +96,17 @@ class Glob(CallableTool2[Params]):
             if not params.include_dirs:
                 matches = [p for p in matches if await p.is_file()]
 
-            # Sort for consistent output
-            matches.sort()
+            # Sort by modification time (newest first)
+            matches_with_mtime: list[tuple[KaosPath, float]] = []
+            for p in matches:
+                try:
+                    stat_result = await p.stat()
+                    matches_with_mtime.append((p, stat_result.st_mtime))
+                except OSError:
+                    # If stat fails, use epoch time (will sort to beginning)
+                    matches_with_mtime.append((p, 0.0))
+            matches_with_mtime.sort(key=lambda x: x[1], reverse=True)
+            matches = [p for p, _ in matches_with_mtime]
 
             # Limit matches
             message = (
@@ -134,13 +121,24 @@ class Glob(CallableTool2[Params]):
                     "You may want to use a more specific pattern."
                 )
 
+            # Return absolute paths if above CWD, relative if inside
+            def path_to_output(p: KaosPath) -> str:
+                """Return absolute path if above CWD, relative if inside."""
+                try:
+                    relative = p.relative_to(self._work_dir)
+                    # Use relative path for files within work directory
+                    return str(relative)
+                except ValueError:
+                    # Path is outside work directory, use absolute
+                    return str(p)
+
             return ToolOk(
-                output="\n".join(str(p.relative_to(dir_path)) for p in matches),
+                output="\n".join(path_to_output(p) for p in matches),
                 message=message,
             )
 
         except Exception as e:
             return ToolError(
                 message=f"Failed to search for pattern {params.pattern}. Error: {e}",
-                brief="Glob failed",
+                brief="FindFiles failed",
             )
