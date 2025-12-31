@@ -11,6 +11,18 @@ Only write entries that are worth mentioning to users.
 
 ## [Unreleased]
 
+## [0.70] - 2025-12-31
+
+- CLI: Add `--final-message-only` (and `--quiet` alias) to only output the final assistant message in print UI
+- LLM: Add `video_in` model capability and support video inputs
+
+## [0.69] - 2025-12-29
+
+- Core: Support discovering skills in `~/.kimi/skills` or `~/.claude/skills`
+- Python: Lower the minimum required Python version to 3.12
+- Nix: Add flake packaging; install with `nix profile install .#kimi-cli` or run `nix run .#kimi-cli`
+- CLI: Add `kimi-cli` script alias for invoking the CLI; can be run via `uvx kimi-cli`
+- Lib: Move LLM config validation into `create_llm` and return `None` when missing config
 
 ## [0.68] - 2025-12-24
 
@@ -177,7 +189,7 @@ Only write entries that are worth mentioning to users.
 - UI: Fix completion after backspacing
 - UI: Fix code block rendering issues on light background colors
 
-## [0.51] - 2025-11-8
+## [0.51] - 2025-11-08
 
 - Lib: Rename `Soul.model` to `Soul.model_name`
 - Lib: Rename `LLMModelCapability` to `ModelCapability` and move to `kimi_cli.llm`

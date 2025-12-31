@@ -189,6 +189,11 @@ uv run kimi  # run Kimi CLI
 make format  # format code
 make check  # run linting and type checking
 make test  # run tests
+make test-kimi-cli  # run Kimi CLI tests only
+make test-kosong  # run kosong tests only
+make test-pykaos  # run pykaos tests only
+make build  # build python packages
+make build-bin  # build standalone binary
 make help  # show all make targets
 ```
 
