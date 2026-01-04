@@ -27,26 +27,26 @@ from kimi_cli.utils.logging import logger
 
 class Params(BaseModel):
     pattern: str = Field(
-        description="The regular expression pattern to search for in file contents"
+        description="The regex pattern to search for witin file contents (e.g., 'function\\s+myFunction', 'import\\s+\\{.*\\}\\s+from\\s+.*')."
     )
     path: str = Field(
         description=(
-            "File or directory to search in. Defaults to current working directory. "
-            "If specified, it must be an absolute path."
+            "Optional: An absolute path to a file or directory to search within. Defaults to the current working directory."
         ),
         default=".",
     )
     glob: str | None = Field(
         description=(
-            "Glob pattern to filter files (e.g. `*.js`, `*.{ts,tsx}`). No filter by default."
+            "Optional: A glob pattern to filter which files are searched (e.g. `*.js`, `*.{ts,tsx}`). If omitted, searches all files (respecting global ignores)."
         ),
         default=None,
     )
     output_mode: str = Field(
         description=(
-            "`content`: Show matching lines (supports `-B`, `-A`, `-C`, `-n`, `head_limit`); "
-            "`files_with_matches`: Show file paths (supports `head_limit`); "
-            "`count_matches`: Show total number of matches. "
+            "Optional: The format returned by this tool. "
+            "`content` - Show matching lines (supports `-B`, `-A`, `-C`, `-n`, `head_limit`); "
+            "`files_with_matches` - Show file paths (supports `head_limit`); "
+            "`count_matches` - Show total number of matches. "
             "Defaults to `files_with_matches`."
         ),
         default="files_with_matches",
@@ -54,7 +54,7 @@ class Params(BaseModel):
     before_context: int | None = Field(
         alias="-B",
         description=(
-            "Number of lines to show before each match (the `-B` option). "
+            "Optional: Number of lines to show before each match (the `-B` option). "
             "Requires `output_mode` to be `content`."
         ),
         default=None,
@@ -62,7 +62,7 @@ class Params(BaseModel):
     after_context: int | None = Field(
         alias="-A",
         description=(
-            "Number of lines to show after each match (the `-A` option). "
+            "Optional: Number of lines to show after each match (the `-A` option). "
             "Requires `output_mode` to be `content`."
         ),
         default=None,
@@ -70,7 +70,7 @@ class Params(BaseModel):
     context: int | None = Field(
         alias="-C",
         description=(
-            "Number of lines to show before and after each match (the `-C` option). "
+            "Optional: Number of lines to show before and after each match (the `-C` option). "
             "Requires `output_mode` to be `content`."
         ),
         default=None,
@@ -78,25 +78,25 @@ class Params(BaseModel):
     line_number: bool = Field(
         alias="-n",
         description=(
-            "Show line numbers in output (the `-n` option). Requires `output_mode` to be `content`."
+            "Optional: Show line numbers in output (the `-n` option). Requires `output_mode` to be `content`."
         ),
         default=False,
     )
     ignore_case: bool = Field(
         alias="-i",
-        description="Case insensitive search (the `-i` option).",
+        description="Optional: Case insensitive search (the `-i` option).",
         default=False,
     )
     type: str | None = Field(
         description=(
-            "File type to search. Examples: py, rust, js, ts, go, java, etc. "
+            "Optional: File type to search. Examples: py, rust, js, ts, go, java, etc. "
             "More efficient than `glob` for standard file types."
         ),
         default=None,
     )
     head_limit: int | None = Field(
         description=(
-            "Limit output to first N lines, equivalent to `| head -N`. "
+            "Optional: Limit output to first N lines, equivalent to `| head -N`. "
             "Works across all output modes: content (limits output lines), "
             "files_with_matches (limits file paths), count_matches (limits count entries). "
             "By default, no limit is applied."
@@ -105,7 +105,7 @@ class Params(BaseModel):
     )
     multiline: bool = Field(
         description=(
-            "Enable multiline mode where `.` matches newlines and patterns can span "
+            "Optional: Enable multiline mode where `.` matches newlines and patterns can span "
             "lines (the `-U` and `--multiline-dotall` options). "
             "By default, multiline mode is disabled."
         ),
@@ -241,7 +241,7 @@ async def _ensure_rg_path() -> str:
 
 
 class Grep(CallableTool2[Params]):
-    name: str = "Grep"
+    name: str = "SearchText"
     description: str = load_desc(Path(__file__).parent / "grep.md")
     params: type[Params] = Params
 

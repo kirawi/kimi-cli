@@ -59,7 +59,7 @@ def extract_key_argument(json_content: str | streamingjson.Lexer, tool_name: str
             if not isinstance(curr_args, dict) or not curr_args.get("pattern"):
                 return None
             key_argument = str(curr_args["pattern"])
-        case "Grep":
+        case "SearchText":
             if not isinstance(curr_args, dict) or not curr_args.get("pattern"):
                 return None
             key_argument = str(curr_args["pattern"])

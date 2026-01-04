@@ -120,27 +120,26 @@ class ReadFile(CallableTool2[Params]):
 
             lines: list[str] = []
             n_bytes = 0
-            truncated_line_numbers: list[int] = []
             max_lines_reached = False
             max_bytes_reached = False
             current_line_no = 0
+            is_truncated = False
             async for line in p.read_lines(errors="replace"):
                 current_line_no += 1
                 if current_line_no < params.line_offset:
                     continue
-                truncated = truncate_line(line, MAX_LINE_LENGTH)
-                if truncated != line:
-                    truncated_line_numbers.append(current_line_no)
-                lines.append(truncated)
-                n_bytes += len(truncated.encode("utf-8"))
+
                 if len(lines) >= params.n_lines:
-                    break
-                if len(lines) >= MAX_LINES:
+                    is_truncated = True
                     max_lines_reached = True
                     break
-                if n_bytes >= MAX_BYTES:
+                elif n_bytes >= MAX_BYTES:
+                    is_truncated = True
                     max_bytes_reached = True
                     break
+
+                lines.append(line)
+                n_bytes += len(line.encode("utf-8"))
 
             # Format output with line numbers like `cat -n`
             lines_with_no: list[str] = []
@@ -150,24 +149,19 @@ class ReadFile(CallableTool2[Params]):
                 # Use 6-digit line number width, right-aligned, with tab separator
                 lines_with_no.append(f"{line_num:6d}\t{line}")
 
-            # Determine truncation status
-            # If we hit max lines, max bytes, or exactly the requested n_lines, we assume truncation/pagination is needed
-            is_truncated = max_lines_reached or max_bytes_reached or (len(lines) == params.n_lines)
-
             content_str = "".join(lines_with_no)
-
             if is_truncated and lines:
                 start = params.line_offset
                 end = params.line_offset + len(lines) - 1
                 next_offset = end + 1
 
                 header = (
-                    "\nIMPORTANT: The file content is possibly truncated.\n"
+                    "\nIMPORTANT: The file content is truncated.\n"
                     f"Status: Showing lines {start}-{end}.\n"
-                    "Action: To try to read more of the file, you can use the 'line_offset' and 'n_lines' "
+                    "Action: To read more of the file, paginate with the 'line_offset' and 'n_lines' "
                     "parameters in a subsequent 'ReadFile' call. "
                     f"For example, to read the next section of the file, use line_offset={next_offset}.\n\n"
-                    "--- FILE CONTENT (possibly truncated) ---\n"
+                    "--- FILE CONTENT (truncated) ---\n"
                 )
                 output_str = header + content_str
             else:
@@ -178,14 +172,14 @@ class ReadFile(CallableTool2[Params]):
                 if len(lines) > 0
                 else "No lines read from file."
             )
+
             if max_lines_reached:
-                message += f" Max {MAX_LINES} lines reached."
+                message += f" Max {params.n_lines} lines reached."
             elif max_bytes_reached:
                 message += f" Max {MAX_BYTES} bytes reached."
-            elif len(lines) < params.n_lines:
+            elif not is_truncated:
                 message += " End of file reached."
-            if truncated_line_numbers:
-                message += f" Lines {truncated_line_numbers} were truncated."
+
             return ToolOk(
                 output=output_str,  # lines already contain \n, just join them
                 message=message,

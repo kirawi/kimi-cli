@@ -1,6 +1,5 @@
-List directory contents given a path to the directory.
+Lists the names of files and subdirectories directly within a specified directory path.
 
 **Tips:**
-- ALWAYS use the `ReadDirectory` tool **instead** of calling the `Shell` tool for reading a directory
-- The maximum number of items that can be shown at once is ${MAX_FILE_DESCRIPTORS}
-- The system will notify you when there is any limitation hit when reading the directory
+- The maximum number of items that can be shown at once is ${MAX_FILE_DESCRIPTORS}.
+- This tool will clearly indicate any limitations hit when trying to read the directory.

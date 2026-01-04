@@ -14,7 +14,7 @@ def load_desc(path: Path, substitutions: dict[str, str] | None = None) -> str:
     return description
 
 
-def truncate_line(line: str, max_length: int, marker: str = "...") -> str:
+def truncate_line(line: str, max_length: int, marker: str = "... (truncated)") -> str:
     """
     Truncate a line if it exceeds `max_length`, preserving the beginning and the line break.
     The output may be longer than `max_length` if it is too short to fit the marker.
