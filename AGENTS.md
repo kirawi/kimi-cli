@@ -18,7 +18,7 @@ shell UI, ACP server mode for IDE integrations, and MCP tool loading.
 
 ## Tech stack
 
-- Python 3.12+ (tooling configured for 3.13)
+- Python 3.12+ (tooling configured for 3.14)
 - CLI framework: Typer
 - Async runtime: asyncio
 - LLM framework: kosong
@@ -58,7 +58,8 @@ shell UI, ACP server mode for IDE integrations, and MCP tool loading.
   and slash command autocomplete; it is the default interactive experience.
 - **Slash commands**: Soul-level commands live in `src/kimi_cli/soul/slash.py`; shell-level
   commands live in `src/kimi_cli/ui/shell/slash.py`. The shell UI exposes both and dispatches
-  based on the registry.
+  based on the registry. Skills are registered as soul-level commands; running
+  `/skill:<skill-name>` loads the skill's `SKILL.md` as a user prompt.
 
 ## Major modules and interfaces
 
@@ -87,7 +88,7 @@ shell UI, ACP server mode for IDE integrations, and MCP tool loading.
 
 ## Conventions and quality
 
-- Python >=3.12 (ty config uses 3.13); line length 100.
+- Python >=3.12 (ty config uses 3.14); line length 100.
 - Ruff handles lint + format (rules: E, F, UP, B, SIM, I); pyright + ty for type checks.
 - Tests use pytest + pytest-asyncio; files are `tests/test_*.py`.
 - CLI entry points: `kimi` / `kimi-cli` -> `src/kimi_cli/cli.py`.

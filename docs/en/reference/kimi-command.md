@@ -125,3 +125,12 @@ Thinking mode requires model support. If not specified, uses the last session's 
 | `--skills-dir PATH` | Specify skills directory (default `~/.kimi/skills`) |
 
 See [Agent Skills](../customization/skills.md) for details.
+
+## Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| [`kimi info`](./kimi-info.md) | Display version and protocol information |
+| [`kimi acp`](./kimi-acp.md) | Start multi-session ACP server |
+| [`kimi mcp`](./kimi-mcp.md) | Manage MCP server configuration |
+| [`kimi term`](./kimi-term.md) | Launch the Toad terminal UI |

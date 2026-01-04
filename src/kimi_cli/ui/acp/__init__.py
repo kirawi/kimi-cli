@@ -8,6 +8,7 @@ from typing import Any
 import acp
 from kosong.message import ContentPart
 
+from kimi_cli.acp.kaos import ACPKaos
 from kimi_cli.acp.mcp import acp_mcp_servers_to_mcp_config
 from kimi_cli.acp.session import ACPSession
 from kimi_cli.acp.tools import replace_tools
@@ -16,6 +17,7 @@ from kimi_cli.constant import NAME, VERSION
 from kimi_cli.soul import Soul, run_soul
 from kimi_cli.soul.kimisoul import KimiSoul
 from kimi_cli.soul.toolset import KimiToolset
+from kimi_cli.utils.aioqueue import QueueShutDown
 from kimi_cli.utils.logging import logger
 from kimi_cli.wire import Wire, WireUISide
 from kimi_cli.wire.message import WireMessage
@@ -91,7 +93,7 @@ class ACPServerSingleSession:
                 while True:
                     msg = await wire_ui.receive()
                     yield msg
-            except asyncio.QueueShutDown:
+            except QueueShutDown:
                 pass
             finally:
                 # stop consuming Wire messages
@@ -102,7 +104,8 @@ class ACPServerSingleSession:
         session_id = (
             self.soul.runtime.session.id if isinstance(self.soul, KimiSoul) else str(uuid.uuid4())
         )
-        self._session = ACPSession(session_id, prompt_fn, self._conn)
+        acp_kaos = ACPKaos(self._conn, session_id, self._client_capabilities)
+        self._session = ACPSession(session_id, prompt_fn, self._conn, kaos=acp_kaos)
 
         mcp_config = acp_mcp_servers_to_mcp_config(mcp_servers)
         if (
