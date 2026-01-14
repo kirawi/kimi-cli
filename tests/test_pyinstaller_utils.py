@@ -73,6 +73,14 @@ def test_pyinstaller_datas():
             ("src/kimi_cli/prompts/compact.md", "kimi_cli/prompts"),
             ("src/kimi_cli/prompts/init.md", "kimi_cli/prompts"),
             (
+                "src/kimi_cli/skills/kimi-cli-help/SKILL.md",
+                "kimi_cli/skills/kimi-cli-help",
+            ),
+            (
+                "src/kimi_cli/skills/skill-creator/SKILL.md",
+                "kimi_cli/skills/skill-creator",
+            ),
+            (
                 "src/kimi_cli/tools/dmail/dmail.md",
                 "kimi_cli/tools/dmail",
             ),
@@ -126,13 +134,14 @@ def test_pyinstaller_hiddenimports():
     assert sorted(hiddenimports) == snapshot(
         [
             "kimi_cli.tools",
+            "kimi_cli.tools.display",
             "kimi_cli.tools.dmail",
             "kimi_cli.tools.file",
-            "kimi_cli.tools.file.diff_utils",
             "kimi_cli.tools.file.glob",
             "kimi_cli.tools.file.grep_local",
             "kimi_cli.tools.file.read",
             "kimi_cli.tools.file.replace",
+            "kimi_cli.tools.file.utils",
             "kimi_cli.tools.file.write",
             "kimi_cli.tools.multiagent",
             "kimi_cli.tools.multiagent.create",

@@ -19,7 +19,7 @@ API 密钥无效可能的原因：
 
 ### 会员过期或配额用尽
 
-如果你使用 Kimi for Coding 平台，可以通过 `/usage` 命令查看当前的配额和会员状态。如果配额用尽或会员过期，需要在 [Kimi for Coding](https://kimi.com/coding) 续费或升级。
+如果你使用 Kimi Code 平台，可以通过 `/usage` 命令查看当前的配额和会员状态。如果配额用尽或会员过期，需要在 [Kimi Code](https://kimi.com/coding) 续费或升级。
 
 ## 交互问题
 
@@ -32,15 +32,6 @@ API 密钥无效可能的原因：
 - **退出并重新启动**：在目标目录中重新运行 `kimi` 命令。
 - **使用 `--work-dir` 参数**：启动时指定工作目录，如 `kimi --work-dir /path/to/project`。
 - **在命令中使用绝对路径**：直接使用绝对路径执行命令，如 `ls /path/to/dir`。
-
-### Thinking 模式不可用
-
-按 `Tab` 键切换 Thinking 模式时，如果提示 "Thinking mode requires a model with thinking capability"，说明当前模型不支持 Thinking 模式。
-
-解决方法：
-
-- **切换到支持的模型**：使用 `/setup` 选择支持 Thinking 的模型（如 `kimi-k2-thinking-turbo`）。
-- **检查模型能力配置**：如果你确定模型支持 Thinking，可以通过环境变量 `KIMI_MODEL_CAPABILITIES=thinking` 强制启用。
 
 ### 粘贴图片失败
 
@@ -58,8 +49,8 @@ API 密钥无效可能的原因：
 如果 IDE（如 Zed 或 JetBrains IDE）无法连接到 Kimi CLI，请检查以下几点：
 
 - **确认 Kimi CLI 已安装**：运行 `kimi --version` 确认安装成功。
-- **检查配置路径**：确保 IDE 配置中的 Kimi CLI 路径正确。通常可以使用 `kimi --acp` 作为命令。
-- **检查 uv 路径**：如果使用 uv 安装，确保 `~/.local/bin` 在 PATH 中。可以使用绝对路径，如 `/Users/yourname/.local/bin/kimi --acp`。
+- **检查配置路径**：确保 IDE 配置中的 Kimi CLI 路径正确。通常可以使用 `kimi acp` 作为命令。
+- **检查 uv 路径**：如果使用 uv 安装，确保 `~/.local/bin` 在 PATH 中。可以使用绝对路径，如 `/Users/yourname/.local/bin/kimi acp`。
 - **查看日志**：检查 `~/.kimi/logs/kimi.log` 中的错误信息。
 
 ## MCP 问题
@@ -121,7 +112,7 @@ kimi mcp add --transport http context7 https://mcp.context7.com/mcp --header "CO
 
 如果 `--print` 模式下没有输出，可能是：
 
-- **未提供输入**：需要通过 `--command` 或 stdin 提供输入。例如：`kimi --print --command "你好"`。
+- **未提供输入**：需要通过 `--prompt`（或 `--command`）或 stdin 提供输入。例如：`kimi --print --prompt "你好"`。
 - **输出被缓冲**：尝试使用 `--output-format stream-json` 获取流式输出。
 - **配置未完成**：确保已通过 `/setup` 配置 API 密钥和模型。
 

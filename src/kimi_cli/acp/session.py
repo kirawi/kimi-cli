@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncGenerator, Callable
 from contextvars import ContextVar
 
 import acp
 import streamingjson  # type: ignore[reportMissingTypeStubs]
 from kaos import Kaos, reset_current_kaos, set_current_kaos
 from kosong.chat_provider import ChatProviderError
-from kosong.message import ContentPart, TextPart, ThinkPart, ToolCall, ToolCallPart
-from kosong.tooling import ToolError, ToolResult
 
 from kimi_cli.acp.convert import (
     acp_blocks_to_content_parts,
@@ -18,21 +15,27 @@ from kimi_cli.acp.convert import (
     tool_result_to_acp_content,
 )
 from kimi_cli.acp.types import ACPContentBlock
+from kimi_cli.app import KimiCLI
 from kimi_cli.soul import LLMNotSet, LLMNotSupported, MaxStepsReached, RunCancelled
 from kimi_cli.tools import extract_key_argument
 from kimi_cli.utils.logging import logger
-from kimi_cli.wire.display import TodoDisplayBlock
-from kimi_cli.wire.message import (
+from kimi_cli.wire.types import (
     ApprovalRequest,
     ApprovalRequestResolved,
     CompactionBegin,
     CompactionEnd,
+    ContentPart,
     StatusUpdate,
     StepBegin,
     StepInterrupted,
     SubagentEvent,
+    TextPart,
+    ThinkPart,
+    TodoDisplayBlock,
+    ToolCall,
+    ToolCallPart,
+    ToolResult,
     TurnBegin,
-    WireMessage,
 )
 
 _current_turn_id = ContextVar[str | None]("current_turn_id", default=None)
@@ -111,12 +114,12 @@ class ACPSession:
     def __init__(
         self,
         id: str,
-        prompt_fn: Callable[[list[ContentPart], asyncio.Event], AsyncGenerator[WireMessage]],
+        cli: KimiCLI,
         acp_conn: acp.Client,
         kaos: Kaos | None = None,
     ) -> None:
         self._id = id
-        self._prompt_fn = prompt_fn
+        self._cli = cli
         self._conn = acp_conn
         self._kaos = kaos
         self._turn_state: _TurnState | None = None
@@ -126,6 +129,11 @@ class ACPSession:
         """The ID of the ACP session."""
         return self._id
 
+    @property
+    def cli(self) -> KimiCLI:
+        """The Kimi CLI instance bound to this ACP session."""
+        return self._cli
+
     async def prompt(self, prompt: list[ACPContentBlock]) -> acp.PromptResponse:
         user_input = acp_blocks_to_content_parts(prompt)
         self._turn_state = _TurnState()
@@ -133,7 +141,7 @@ class ACPSession:
         kaos_token = set_current_kaos(self._kaos) if self._kaos is not None else None
         terminal_tool_calls_token = _terminal_tool_call_ids.set(set())
         try:
-            async for msg in self._prompt_fn(user_input, self._turn_state.cancel_event):
+            async for msg in self._cli.run(user_input, self._turn_state.cancel_event):
                 match msg:
                     case TurnBegin():
                         pass
@@ -168,7 +176,7 @@ class ACPSession:
                         await self._handle_approval_request(msg)
         except LLMNotSet as e:
             logger.exception("LLM not set:")
-            raise acp.RequestError.internal_error({"error": str(e)}) from e
+            raise acp.RequestError.auth_required() from e
         except LLMNotSupported as e:
             logger.exception("LLM not supported:")
             raise acp.RequestError.internal_error({"error": str(e)}) from e
@@ -293,7 +301,6 @@ class ACPSession:
             return
 
         tool_ret = result.return_value
-        is_error = isinstance(tool_ret, ToolError)
 
         state = self._turn_state.tool_calls.pop(result.tool_call_id, None)
         if state is None:
@@ -303,7 +310,7 @@ class ACPSession:
         update = acp.schema.ToolCallProgress(
             session_update="tool_call_update",
             tool_call_id=state.acp_tool_call_id,
-            status="failed" if is_error else "completed",
+            status="failed" if tool_ret.is_error else "completed",
         )
 
         contents = (

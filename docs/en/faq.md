@@ -19,7 +19,7 @@ Possible reasons for an invalid API key:
 
 ### Membership expired or quota exhausted
 
-If you're using the Kimi for Coding platform, you can check your current quota and membership status with the `/usage` command. If the quota is exhausted or membership expired, you need to renew or upgrade at [Kimi for Coding](https://kimi.com/coding).
+If you're using the Kimi Code platform, you can check your current quota and membership status with the `/usage` command. If the quota is exhausted or membership expired, you need to renew or upgrade at [Kimi Code](https://kimi.com/coding).
 
 ## Interaction Issues
 
@@ -32,15 +32,6 @@ If you need to change working directory:
 - **Exit and restart**: Run the `kimi` command again in the target directory.
 - **Use `--work-dir` flag**: Specify working directory at startup, like `kimi --work-dir /path/to/project`.
 - **Use absolute paths in commands**: Execute commands with absolute paths directly, like `ls /path/to/dir`.
-
-### Thinking mode unavailable
-
-When pressing `Tab` to toggle thinking mode, if you see "Thinking mode requires a model with thinking capability", it means the current model doesn't support thinking mode.
-
-Solutions:
-
-- **Switch to a supported model**: Use `/setup` to select a model that supports thinking (like `kimi-k2-thinking-turbo`).
-- **Check model capability configuration**: If you're sure the model supports thinking, you can force enable it with the environment variable `KIMI_MODEL_CAPABILITIES=thinking`.
 
 ### Image paste fails
 
@@ -58,8 +49,8 @@ Solutions:
 If your IDE (like Zed or JetBrains IDEs) cannot connect to Kimi CLI, check the following:
 
 - **Confirm Kimi CLI is installed**: Run `kimi --version` to confirm successful installation.
-- **Check configuration path**: Ensure the Kimi CLI path in IDE configuration is correct. You can typically use `kimi --acp` as the command.
-- **Check uv path**: If installed via uv, ensure `~/.local/bin` is in PATH. You can use an absolute path like `/Users/yourname/.local/bin/kimi --acp`.
+- **Check configuration path**: Ensure the Kimi CLI path in IDE configuration is correct. You can typically use `kimi acp` as the command.
+- **Check uv path**: If installed via uv, ensure `~/.local/bin` is in PATH. You can use an absolute path like `/Users/yourname/.local/bin/kimi acp`.
 - **Check logs**: Examine error messages in `~/.kimi/logs/kimi.log`.
 
 ## MCP Issues
@@ -121,7 +112,7 @@ Correct input format example:
 
 If there's no output in `--print` mode, it may be:
 
-- **No input provided**: You need to provide input via `--command` or stdin. For example: `kimi --print --command "Hello"`.
+- **No input provided**: You need to provide input via `--prompt` (or `--command`) or stdin. For example: `kimi --print --prompt "Hello"`.
 - **Output is buffered**: Try using `--output-format stream-json` for streaming output.
 - **Configuration incomplete**: Ensure API key and model are configured via `/setup`.
 

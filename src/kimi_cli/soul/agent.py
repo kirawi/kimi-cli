@@ -19,7 +19,8 @@ from kimi_cli.llm import LLM
 from kimi_cli.session import Session
 from kimi_cli.skill import (
     Skill,
-    discover_skills,
+    discover_skills_from_roots,
+    get_builtin_skills_dir,
     get_claude_skills_dir,
     get_skills_dir,
     index_skills,
@@ -64,12 +65,12 @@ async def load_agents_md(work_dir: KaosPath) -> str | None:
     return None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(slots=True, kw_only=True)
 class Runtime:
     """Agent runtime."""
 
     config: Config
-    llm: LLM | None
+    llm: LLM | None  # we do not freeze the `Runtime` dataclass because LLM can be changed
     session: Session
     builtin_args: BuiltinSystemPromptArgs
     denwa_renji: DenwaRenji
@@ -93,11 +94,13 @@ class Runtime:
         )
 
         # Discover and format skills
+        builtin_skills_dir = get_builtin_skills_dir()
         if skills_dir is None:
             skills_dir = get_skills_dir()
             if not skills_dir.is_dir() and (claude_skills_dir := get_claude_skills_dir()).is_dir():
                 skills_dir = claude_skills_dir
-        skills = discover_skills(skills_dir)
+        skills_roots = [builtin_skills_dir, skills_dir]
+        skills = discover_skills_from_roots(skills_roots)
         skills_by_name = index_skills(skills)
         logger.info("Discovered {count} skill(s)", count=len(skills))
         skills_formatted = "\n".join(
@@ -227,6 +230,7 @@ async def load_agent(
     tool_deps = {
         KimiToolset: toolset,
         Runtime: runtime,
+        # TODO: remove all the following dependencies and use Runtime instead
         Config: runtime.config,
         BuiltinSystemPromptArgs: runtime.builtin_args,
         Session: runtime.session,

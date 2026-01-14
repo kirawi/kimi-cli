@@ -19,6 +19,8 @@ $ git status
 $ npm run build
 ```
 
+Shell 模式也支持部分斜杠命令，包括 `/help`、`/exit`、`/version`、`/changelog` 和 `/feedback`。
+
 ::: warning 注意
 Shell 模式中每个命令独立执行，`cd`、`export` 等改变环境的命令不会影响后续命令。
 :::
@@ -27,14 +29,14 @@ Shell 模式中每个命令独立执行，`cd`、`export` 等改变环境的命�
 
 Thinking 模式让 AI 在回答前进行更深入的思考，适合处理复杂问题。
 
-在 Agent 模式下按 `Tab` 键可以切换 Thinking 模式的开关状态，切换后底部状态栏会显示提示。也可以在启动时通过 `--thinking` 参数启用：
+你可以通过 `/model` 命令切换模型和 Thinking 模式。在选择模型后，如果模型支持 Thinking 模式，系统会询问是否开启。也可以在启动时通过 `--thinking` 参数启用：
 
 ```sh
 kimi --thinking
 ```
 
 ::: tip 提示
-Thinking 模式需要当前模型支持。
+Thinking 模式需要当前模型支持。部分模型（如 `kimi-k2-thinking-turbo`）始终使用 Thinking 模式，无法关闭。
 :::
 
 ## 多行输入
@@ -86,6 +88,8 @@ kimi --yolo
 # 或在运行中切换
 /yolo
 ```
+
+开启 YOLO 模式后，底部状态栏会显示黄色的 YOLO 标识。再次输入 `/yolo` 可关闭。
 
 ::: warning 注意
 YOLO 模式会跳过所有确认，请确保你了解可能的风险。建议仅在可控环境中使用。

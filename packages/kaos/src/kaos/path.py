@@ -107,6 +107,17 @@ class KaosPath:
         """Return the current working directory as a KaosPath."""
         return kaos.getcwd()
 
+    def expanduser(self) -> KaosPath:
+        """Expand `~` to the backend home directory."""
+        parts = self._path.parts
+        if not parts or parts[0] != "~":
+            return self
+
+        home = KaosPath.home()
+        if len(parts) == 1:
+            return home
+        return home.joinpath(*parts[1:])
+
     async def stat(self, follow_symlinks: bool = True) -> kaos.StatResult:
         """Return an os.stat_result for the path."""
         return await kaos.stat(self, follow_symlinks=follow_symlinks)
@@ -143,9 +154,9 @@ class KaosPath:
         """Return all paths matching the pattern under this directory."""
         return kaos.glob(self, pattern, case_sensitive=case_sensitive)
 
-    async def read_bytes(self) -> bytes:
-        """Read the entire file contents as bytes."""
-        return await kaos.readbytes(self)
+    async def read_bytes(self, n: int | None = None) -> bytes:
+        """Read the entire file contents as bytes, or the first n bytes if provided."""
+        return await kaos.readbytes(self, n=n)
 
     async def read_text(
         self,

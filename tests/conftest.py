@@ -18,7 +18,7 @@ from kosong.tooling.empty import EmptyToolset
 from pydantic import SecretStr
 
 from kimi_cli.config import Config, MoonshotSearchConfig, get_default_config
-from kimi_cli.llm import LLM
+from kimi_cli.llm import ALL_MODEL_CAPABILITIES, LLM
 from kimi_cli.metadata import WorkDirMeta
 from kimi_cli.session import Session
 from kimi_cli.soul.agent import Agent, BuiltinSystemPromptArgs, LaborMarket, Runtime
@@ -58,7 +58,7 @@ def llm() -> LLM:
     return LLM(
         chat_provider=MockChatProvider([]),
         max_context_size=100_000,
-        capabilities=set(),
+        capabilities=ALL_MODEL_CAPABILITIES,
     )
 
 
@@ -192,9 +192,8 @@ def toolset() -> KimiToolset:
 @contextmanager
 def tool_call_context(tool_name: str) -> Generator[None]:
     """Create a tool call context."""
-    from kosong.message import ToolCall
-
     from kimi_cli.soul.toolset import current_tool_call
+    from kimi_cli.wire.types import ToolCall
 
     token = current_tool_call.set(
         ToolCall(id="test", function=ToolCall.FunctionBody(name=tool_name, arguments=None))
@@ -243,9 +242,9 @@ def shell_tool(approval: Approval, environment: Environment) -> Generator[Shell]
 
 
 @pytest.fixture
-def read_file_tool(builtin_args: BuiltinSystemPromptArgs) -> ReadFile:
+def read_file_tool(runtime: Runtime) -> ReadFile:
     """Create a ReadFile tool instance."""
-    return ReadFile(builtin_args)
+    return ReadFile(runtime)
 
 
 @pytest.fixture

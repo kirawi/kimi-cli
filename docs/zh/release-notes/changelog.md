@@ -2,6 +2,56 @@
 
 本页面记录 Kimi CLI 各版本的变更内容。
 
+## 未发布
+
+## 0.77 (2026-01-15)
+
+- Shell：修复 `/help` 和 `/changelog` 全屏分页显示中的换行问题
+- Shell：使用 `/model` 命令切换 Thinking 模式，取代 Tab 键
+- Config：添加 `default_thinking` 配置项（升级后需运行 `/model` 选择 Thinking 模式）
+- LLM：为始终使用 Thinking 模式的模型添加 `always_thinking` 能力
+- CLI：将 `--command`/`-c` 重命名为 `--prompt`/`-p`，保留 `--command`/`-c` 作为别名，移除 `--query`/`-q`
+- Wire：修复 Wire 模式下审批请求无法正常响应的问题
+- CLI：添加 `--prompt-flow` 选项，加载 Mermaid 流程图文件作为 Prompt Flow
+- Core：加载 Prompt Flow 后添加 `/begin` 斜杠命令以启动流程
+- Core：使用基于 Prompt Flow 的实现替换旧的 Ralph 循环
+
+## 0.76 (2026-01-12)
+
+- Tool：让 `ReadFile` 工具描述根据模型能力动态反映图片/视频支持情况
+- Tool：修复 TypeScript 文件（`.ts`、`.tsx`、`.mts`、`.cts`）被误识别为视频文件的问题
+- Shell：允许在 Shell 模式下使用部分斜杠命令（`/help`、`/exit`、`/version`、`/changelog`、`/feedback`）
+- Shell：改进 `/help` 显示，使用全屏分页器，展示斜杠命令、Skills 和键盘快捷键
+- Shell：改进 `/changelog` 和 `/mcp` 显示，采用一致的项目符号格式
+- Shell：在底部状态栏显示当前模型名称
+- Shell：添加 `Ctrl-/` 快捷键显示帮助
+
+## 0.75 (2026-01-09)
+
+- Tool：改进 `ReadFile` 工具描述
+- Skills：添加内置 `kimi-cli-help` Skill，解答 Kimi CLI 使用和配置问题
+
+## 0.74 (2026-01-09)
+
+- ACP：允许 ACP 客户端选择和切换模型（包含 Thinking 变体）
+- ACP：添加 `terminal-auth` 认证方式，用于配置流程
+- CLI：弃用 `--acp` 选项，请使用 `kimi acp` 子命令
+- Tool：`ReadFile` 工具现支持读取图片和视频文件
+
+## 0.73 (2026-01-09)
+
+- Skills：添加随软件包发布的内置 skill-creator Skill
+- Tool：在 `ReadFile` 路径中将 `~` 展开为用户主目录
+- MCP：确保 MCP 工具加载完成后再开始 Agent 循环
+- Wire：修复 Wire 模式无法接受有效 `cancel` 请求的问题
+- Setup：`/model` 命令现在可以切换所选供应商的所有可用模型
+- Lib：从 `kimi_cli.wire.types` 重新导出所有 Wire 消息类型，作为 `kimi_cli.wire.message` 的替代
+- Loop：添加 `max_ralph_iterations` 循环控制配置，限制额外的 Ralph 迭代次数
+- Config：将循环控制配置中的 `max_steps_per_run` 重命名为 `max_steps_per_turn`（向后兼容）
+- CLI：添加 `--max-steps-per-turn`、`--max-retries-per-step` 和 `--max-ralph-iterations` 选项，覆盖循环控制配置
+- SlashCmd：`/yolo` 命令现在切换 YOLO 模式
+- UI：在 Shell 模式的提示符中显示 YOLO 标识
+
 ## 0.72 (2026-01-04)
 
 - Python：修复在 Python 3.14 上的安装问题
@@ -75,7 +125,7 @@
 - CLI：退出时删除空会话，列表中忽略上下文文件为空的会话
 - UI：改进会话回放
 - Lib：在 `LLM` 类中添加 `model_config: LLMModel | None` 和 `provider_config: LLMProvider | None` 属性
-- MetaCmd：添加 `/usage` 元命令，为 Kimi for Coding 用户显示 API 使用情况
+- MetaCmd：添加 `/usage` 元命令，为 Kimi Code 用户显示 API 使用情况
 
 ## 0.64 (2025-12-15)
 
@@ -140,7 +190,7 @@
 - Core：修复使用 `extend` 时 Agent 规格文件的字段继承问题
 - Core：支持在子代理中使用 MCP 工具
 - Tool：添加 `CreateSubagent` 工具，动态创建子代理（默认 Agent 中未启用）
-- Tool：Kimi for Coding 方案在 `FetchURL` 工具中使用 MoonshotFetch 服务
+- Tool：Kimi Code 方案在 `FetchURL` 工具中使用 MoonshotFetch 服务
 - Tool：截断 Grep 工具输出，避免超出 token 限制
 
 ## 0.57 (2025-11-20)

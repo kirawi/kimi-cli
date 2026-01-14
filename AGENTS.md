@@ -118,4 +118,3 @@ Allowed types:
    - `git tag 0.68` or `git tag pykaos-0.5.3`
    - `git push --tags`
 9. GitHub Actions handles the release after tags are pushed.
->>>>>>> 1f9bbc69810100ed427caba6598a8d011f25c727

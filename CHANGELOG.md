@@ -11,6 +11,53 @@ Only write entries that are worth mentioning to users.
 
 ## Unreleased
 
+## 0.77 (2026-01-15)
+
+- Shell: Fix line breaking in `/help` and `/changelog` fullscreen pager display
+- Shell: Use `/model` to toggle thinking mode instead of Tab key
+- Config: Add `default_thinking` config option (need to run `/model` to select thinking mode after upgrade)
+- LLM: Add `always_thinking` capability for models that always use thinking mode
+- CLI: Rename `--command`/`-c` to `--prompt`/`-p`, keep `--command`/`-c` as alias, remove `--query`/`-q`
+- Wire: Fix approval requests not responding properly in Wire mode
+- CLI: Add `--prompt-flow` option to load a Mermaid flowchart file as a Prompt Flow
+- Core: Add `/begin` slash command if a Prompt Flow is loaded to start the flow
+- Core: Replace Ralph Loop with Prompt Flow-based implementation
+
+## 0.76 (2026-01-12)
+
+- Tool: Make `ReadFile` tool description reflect model capabilities for image/video support
+- Tool: Fix TypeScript files (`.ts`, `.tsx`, `.mts`, `.cts`) being misidentified as video files
+- Shell: Allow slash commands (`/help`, `/exit`, `/version`, `/changelog`, `/feedback`) in shell mode
+- Shell: Improve `/help` with fullscreen pager, showing slash commands, skills, and keyboard shortcuts
+- Shell: Improve `/changelog` and `/mcp` display with consistent bullet-style formatting
+- Shell: Show current model name in the bottom status bar
+- Shell: Add `Ctrl-/` shortcut to show help
+
+## 0.75 (2026-01-09)
+
+- Tool: Improve `ReadFile` tool description
+- Skills: Add built-in `kimi-cli-help` skill to answer Kimi CLI usage and configuration questions
+
+## 0.74 (2026-01-09)
+
+- ACP: Allow ACP clients to select and switch models (with thinking variants)
+- ACP: Add `terminal-auth` authentication method for setup flow
+- CLI: Deprecate `--acp` option in favor of `kimi acp` subcommand
+- Tool: Support reading image and video files in `ReadFile` tool
+
+## 0.73 (2026-01-09)
+
+- Skills: Add built-in skill-creator skill shipped with the package
+- Tool: Expand `~` to the home directory in `ReadFile` paths
+- MCP: Ensure MCP tools finish loading before starting the agent loop
+- Wire: Fix Wire mode failing to accept valid `cancel` requests
+- Setup: Allow `/model` to switch between all available models for the selected provider
+- Lib: Re-export all Wire message types from `kimi_cli.wire.types`, as a replacement of `kimi_cli.wire.message`
+- Loop: Add `max_ralph_iterations` loop control config to limit extra Ralph iterations
+- Config: Rename `max_steps_per_run` to `max_steps_per_turn` in loop control config (backward-compatible)
+- CLI: Add `--max-steps-per-turn`, `--max-retries-per-step` and `--max-ralph-iterations` options to override loop control config
+- SlashCmd: Make `/yolo` toggle auto-approve mode
+- UI: Show a YOLO badge in the shell prompt
 
 ## 0.72 (2026-01-04)
 
@@ -85,7 +132,7 @@ Only write entries that are worth mentioning to users.
 - CLI: Delete empty sessions on exit and ignore sessions whose context file is empty when listing
 - UI: Improve session replaying
 - Lib: Add `model_config: LLMModel | None` and `provider_config: LLMProvider | None` properties to `LLM` class
-- MetaCmd: Add `/usage` meta command to show API usage for Kimi for Coding users
+- MetaCmd: Add `/usage` meta command to show API usage for Kimi Code users
 
 ## 0.64 (2025-12-15)
 
@@ -150,7 +197,7 @@ Only write entries that are worth mentioning to users.
 - Core: Fix field inheritance of agent spec files when using `extend`
 - Core: Support using MCP tools in subagents
 - Tool: Add `CreateSubagent` tool to create subagents dynamically (not enabled in default agent)
-- Tool: Use MoonshotFetch service in `FetchURL` tool for Kimi for Coding plan
+- Tool: Use MoonshotFetch service in `FetchURL` tool for Kimi Code plan
 - Tool: Truncate Grep tool output to avoid exceeding token limit
 
 ## 0.57 (2025-11-20)

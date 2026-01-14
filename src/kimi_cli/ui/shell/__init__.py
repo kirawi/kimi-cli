@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Any
 
 from kosong.chat_provider import APIStatusError, ChatProviderError
-from kosong.message import ContentPart
 from loguru import logger
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -21,13 +20,14 @@ from kimi_cli.ui.shell.console import console
 from kimi_cli.ui.shell.prompt import CustomPromptSession, PromptMode, toast
 from kimi_cli.ui.shell.replay import replay_recent_history
 from kimi_cli.ui.shell.slash import registry as shell_slash_registry
+from kimi_cli.ui.shell.slash import shell_mode_registry
 from kimi_cli.ui.shell.update import LATEST_VERSION_FILE, UpdateResult, do_update, semver_tuple
 from kimi_cli.ui.shell.visualize import visualize
 from kimi_cli.utils.envvar import get_env_bool
 from kimi_cli.utils.signals import install_sigint_handler
 from kimi_cli.utils.slashcmd import SlashCommand, SlashCommandCall, parse_slash_command_call
 from kimi_cli.utils.term import ensure_new_line, ensure_tty_sane
-from kimi_cli.wire.message import StatusUpdate
+from kimi_cli.wire.types import ContentPart, StatusUpdate
 
 
 class Shell:
@@ -69,8 +69,10 @@ class Shell:
         with CustomPromptSession(
             status_provider=lambda: self.soul.status,
             model_capabilities=self.soul.model_capabilities or set(),
-            initial_thinking=isinstance(self.soul, KimiSoul) and self.soul.thinking,
-            available_slash_commands=list(self._available_slash_commands.values()),
+            model_name=self.soul.model_name,
+            thinking=self.soul.thinking or False,
+            agent_mode_slash_commands=list(self._available_slash_commands.values()),
+            shell_mode_slash_commands=shell_mode_registry.list_commands(),
         ) as prompt_session:
             try:
                 while True:
@@ -105,7 +107,7 @@ class Shell:
                         await self._run_slash_command(slash_cmd_call)
                         continue
 
-                    await self._run_soul_command(user_input.content, user_input.thinking)
+                    await self._run_soul_command(user_input.content)
             finally:
                 ensure_tty_sane()
 
@@ -115,6 +117,18 @@ class Shell:
         """Run a shell command in foreground."""
         if not command.strip():
             return
+
+        # Check if it's an allowed slash command in shell mode
+        if slash_cmd_call := parse_slash_command_call(command):
+            if shell_mode_registry.find_command(slash_cmd_call.name):
+                await self._run_slash_command(slash_cmd_call)
+                return
+            else:
+                console.print(
+                    f'[yellow]"/{slash_cmd_call.name}" is not available in shell mode. '
+                    "Press Ctrl-X to switch to agent mode.[/yellow]"
+                )
+                return
 
         # Check if user is trying to use 'cd' command
         stripped_cmd = command.strip()
@@ -183,22 +197,14 @@ class Shell:
             console.print(f"[red]Unknown error: {e}[/red]")
             raise  # re-raise unknown error
 
-    async def _run_soul_command(
-        self,
-        user_input: str | list[ContentPart],
-        thinking: bool | None = None,
-    ) -> bool:
+    async def _run_soul_command(self, user_input: str | list[ContentPart]) -> bool:
         """
         Run the soul and handle any known exceptions.
 
         Returns:
             bool: Whether the run is successful.
         """
-        logger.info(
-            "Running soul with user input: {user_input}, thinking {thinking}",
-            user_input=user_input,
-            thinking=thinking,
-        )
+        logger.info("Running soul with user input: {user_input}", user_input=user_input)
 
         cancel_event = asyncio.Event()
 
@@ -210,9 +216,6 @@ class Shell:
         remove_sigint = install_sigint_handler(loop, _handler)
 
         try:
-            if isinstance(self.soul, KimiSoul) and thinking is not None:
-                self.soul.set_thinking(thinking)
-
             await run_soul(
                 self.soul,
                 user_input,

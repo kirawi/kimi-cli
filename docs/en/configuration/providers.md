@@ -16,7 +16,7 @@ After configuration, Kimi CLI will automatically save settings to `~/.kimi/confi
 
 | Platform | Description |
 | --- | --- |
-| Kimi for Coding | Kimi for Coding platform, supports search and fetch services |
+| Kimi Code | Kimi Code platform, supports search and fetch services |
 | Moonshot AI Open Platform (moonshot.cn) | China region API endpoint |
 | Moonshot AI Open Platform (moonshot.ai) | Global region API endpoint |
 
@@ -37,7 +37,7 @@ The `type` field in `providers` configuration specifies the API provider type. D
 
 ### `kimi`
 
-For connecting to Kimi API, including Kimi for Coding and Moonshot AI Open Platform.
+For connecting to Kimi API, including Kimi Code and Moonshot AI Open Platform.
 
 ```toml
 [providers.kimi-for-coding]
@@ -108,7 +108,8 @@ The `capabilities` field in model configuration declares the capabilities suppor
 
 | Capability | Description |
 | --- | --- |
-| `thinking` | Supports thinking mode (deep reasoning) |
+| `thinking` | Supports thinking mode (deep reasoning), can be toggled |
+| `always_thinking` | Always uses thinking mode (cannot be disabled) |
 | `image_in` | Supports image input |
 | `video_in` | Supports video input |
 
@@ -122,7 +123,11 @@ capabilities = ["thinking", "image_in"]
 
 ### `thinking`
 
-When thinking mode is enabled, the model performs deeper reasoning before answering, suitable for complex problems. In shell mode, you can toggle thinking mode with the `Tab` key, or control it at startup with `--thinking` / `--no-thinking` flags.
+Declares that the model supports thinking mode. When enabled, the model performs deeper reasoning before answering, suitable for complex problems. In shell mode, you can use the `/model` command to switch models and thinking mode, or control it at startup with `--thinking` / `--no-thinking` flags.
+
+### `always_thinking`
+
+Indicates the model always uses thinking mode and cannot be disabled. For example, models with "thinking" in their name like `kimi-k2-thinking-turbo` typically have this capability. When using such models, the `/model` command won't prompt for thinking mode toggle.
 
 ### `image_in`
 
@@ -134,9 +139,9 @@ When video input capability is enabled, you can send video content in conversati
 
 ## Search and fetch services
 
-The `SearchWeb` and `FetchURL` tools depend on external services, currently only provided by the Kimi for Coding platform.
+The `SearchWeb` and `FetchURL` tools depend on external services, currently only provided by the Kimi Code platform.
 
-When selecting the Kimi for Coding platform using `/setup`, search and fetch services are automatically configured.
+When selecting the Kimi Code platform using `/setup`, search and fetch services are automatically configured.
 
 | Service | Corresponding tool | Behavior when not configured |
 | --- | --- | --- |

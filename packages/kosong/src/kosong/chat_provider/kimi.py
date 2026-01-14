@@ -18,7 +18,6 @@ from openai.types.completion_usage import CompletionUsage
 from kosong.chat_provider import (
     ChatProvider,
     ChatProviderError,
-    StreamedMessage,
     StreamedMessagePart,
     ThinkingEffort,
     TokenUsage,
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
         _: ChatProvider = kimi
 
 
-class Kimi(ChatProvider):
+class Kimi:
     """
     A chat provider that uses the Kimi API.
 
@@ -98,6 +97,21 @@ class Kimi(ChatProvider):
     @property
     def model_name(self) -> str:
         return self.model
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        reasoning_effort = self._generation_kwargs.get("reasoning_effort")
+        if reasoning_effort is None:
+            return None
+        match reasoning_effort:
+            case "low":
+                return "low"
+            case "medium":
+                return "medium"
+            case "high":
+                return "high"
+            case _:
+                return "off"
 
     async def generate(
         self,
@@ -205,7 +219,7 @@ def _convert_tool(tool: Tool) -> ChatCompletionToolParam:
         return tool_to_openai(tool)
 
 
-class KimiStreamedMessage(StreamedMessage):
+class KimiStreamedMessage:
     """The streamed message of the Kimi chat provider."""
 
     def __init__(self, response: ChatCompletion | AsyncStream[ChatCompletionChunk]):

@@ -1,11 +1,11 @@
 [project]
 name = "pykaos"
-version = "0.5.3"
+version = "0.6.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "aiofiles==25.1.0",
+    "aiofiles>=24.0,<26.0",
     "asyncssh==2.21.1",
 ]
 
@@ -38,6 +38,14 @@ select = [
     "B",   # flake8-bugbear
     "SIM", # flake8-simplify
     "I",   # isort
+]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+include = [
+    "src/**/*.py",
+    "tests/**/*.py",
 ]
 
 [tool.ty.environment]

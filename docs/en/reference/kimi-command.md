@@ -60,10 +60,62 @@ The working directory determines the root directory for file operations. The age
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--command TEXT` | `-c` | Pass user query, doesn't enter interactive mode |
-| `--query TEXT` | `-q` | Alias for `--command` |
+| `--prompt TEXT` | `-p` | Pass user prompt, doesn't enter interactive mode |
+| `--command TEXT` | `-c` | Alias for `--prompt` |
 
-When using `--command`, Kimi CLI exits after processing the query (unless `--print` is specified, results are still displayed in interactive mode).
+When using `--prompt` (or `--command`), Kimi CLI exits after processing the query (unless `--print` is specified, results are still displayed in interactive mode).
+
+## Loop control
+
+| Option | Description |
+|--------|-------------|
+| `--max-steps-per-turn N` | Maximum steps per turn, overrides `loop_control.max_steps_per_turn` in config file |
+| `--max-retries-per-step N` | Maximum retries per step, overrides `loop_control.max_retries_per_step` in config file |
+| `--max-ralph-iterations N` | Number of iterations for Ralph Loop mode; `0` disables; `-1` is unlimited |
+
+### Ralph Loop
+
+[Ralph](https://ghuntley.com/ralph/) is a technique that puts an agent in a loop: the same prompt is fed again and again so the agent can keep iterating one big task.
+
+When `--max-ralph-iterations` is not `0`, Kimi CLI enters Ralph Loop mode and automatically loops through task execution based on an internal Prompt Flow, until the agent outputs `<choice>STOP</choice>` or the iteration limit is reached.
+
+::: info Note
+Ralph Loop is mutually exclusive with the `--prompt-flow` option and cannot be used together.
+:::
+
+## Prompt Flow
+
+| Option | Description |
+|--------|-------------|
+| `--prompt-flow PATH` | Load a Mermaid flowchart file as a Prompt Flow |
+
+Prompt Flow is a workflow description method based on Mermaid flowcharts, where each node corresponds to one conversation turn. After loading, you can start the flow execution with the `/begin` command.
+
+Flowchart example (`example.mmd` file):
+
+```
+flowchart TD
+    A([BEGIN]) --> B[Analyze existing code, write design doc for XXX feature in design.md]
+    B --> C{Review design.md, is it detailed enough?}
+    C -->|Yes| D[Start implementation]
+    C -->|No| B
+    D --> F([END])
+```
+
+```mermaid
+flowchart TD
+    A([BEGIN]) --> B[Analyze existing code, write design doc for XXX feature in design.md]
+    B --> C{Review design.md, is it detailed enough?}
+    C -->|Yes| D[Start implementation]
+    C -->|No| B
+    D --> F([END])
+```
+
+During node processing, decision nodes (`{}`) require the agent to output `<choice>branch name</choice>` to select the next node.
+
+::: info Note
+`--prompt-flow` is mutually exclusive with Ralph Loop mode and cannot be used together.
+:::
 
 ## UI modes
 
@@ -71,7 +123,7 @@ When using `--command`, Kimi CLI exits after processing the query (unless `--pri
 |--------|-------------|
 | `--print` | Run in print mode (non-interactive), implicitly enables `--yolo` |
 | `--quiet` | Shortcut for `--print --output-format text --final-message-only` |
-| `--acp` | Run in ACP server mode |
+| `--acp` | Run in ACP server mode (deprecated, use `kimi acp` instead) |
 | `--wire` | Run in Wire server mode (experimental) |
 
 The four options are mutually exclusive, only one can be selected. Default is shell mode. See [Print Mode](../customization/print-mode.md) and [Wire Mode](../customization/wire-mode.md) for details.

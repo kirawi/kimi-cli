@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
 from typing import Literal, Protocol, Self, runtime_checkable
+
+from pydantic import BaseModel
 
 from kosong.message import ContentPart, Message, ToolCall, ToolCallPart
 from kosong.tooling import Tool
@@ -19,6 +20,13 @@ class ChatProvider(Protocol):
     def model_name(self) -> str:
         """
         The name of the model to use.
+        """
+        ...
+
+    @property
+    def thinking_effort(self) -> "ThinkingEffort | None":
+        """
+        The current thinking effort level. Returns None if not explicitly set.
         """
         ...
 
@@ -69,8 +77,7 @@ class StreamedMessage(Protocol):
         ...
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class TokenUsage:
+class TokenUsage(BaseModel):
     """Token usage statistics."""
 
     input_other: int

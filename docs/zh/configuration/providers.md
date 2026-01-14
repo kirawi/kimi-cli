@@ -16,7 +16,7 @@ Kimi CLI 支持多种 LLM 平台，可以通过配置文件或 `/setup` 命令�
 
 | 平台 | 说明 |
 | --- | --- |
-| Kimi for Coding | Kimi for Coding 平台，支持搜索和抓取服务 |
+| Kimi Code | Kimi Code 平台，支持搜索和抓取服务 |
 | Moonshot AI 开放平台 (moonshot.cn) | 中国区 API 端点 |
 | Moonshot AI Open Platform (moonshot.ai) | 全球区 API 端点 |
 
@@ -37,7 +37,7 @@ Kimi CLI 支持多种 LLM 平台，可以通过配置文件或 `/setup` 命令�
 
 ### `kimi`
 
-用于连接 Kimi API，包括 Kimi for Coding 和 Moonshot AI 开放平台。
+用于连接 Kimi API，包括 Kimi Code 和 Moonshot AI 开放平台。
 
 ```toml
 [providers.kimi-for-coding]
@@ -108,7 +108,8 @@ env = { GOOGLE_CLOUD_PROJECT = "your-project-id" }
 
 | 能力 | 说明 |
 | --- | --- |
-| `thinking` | 支持 thinking 模式（深度思考） |
+| `thinking` | 支持 Thinking 模式（深度思考），可开关 |
+| `always_thinking` | 始终使用 Thinking 模式（不可关闭） |
 | `image_in` | 支持图片输入 |
 | `video_in` | 支持视频输入 |
 
@@ -122,7 +123,11 @@ capabilities = ["thinking", "image_in"]
 
 ### `thinking`
 
-启用 Thinking 模式后，模型会在回答前进行更深入的推理，适合复杂问题。在 Shell 模式下，可以通过 `Tab` 键切换 Thinking 模式，或在启动时通过 `--thinking` / `--no-thinking` 参数控制。
+声明模型支持 Thinking 模式。启用后，模型会在回答前进行更深入的推理，适合复杂问题。在 Shell 模式下，可以通过 `/model` 命令切换模型和 Thinking 模式，或在启动时通过 `--thinking` / `--no-thinking` 参数控制。
+
+### `always_thinking`
+
+表示模型始终使用 Thinking 模式，无法关闭。例如 `kimi-k2-thinking-turbo` 等名称中包含 "thinking" 的模型通常具有此能力。使用这类模型时，`/model` 命令不会提示选择 Thinking 模式的开关。
 
 ### `image_in`
 
@@ -134,9 +139,9 @@ capabilities = ["thinking", "image_in"]
 
 ## 搜索和抓取服务
 
-`SearchWeb` 和 `FetchURL` 工具依赖外部服务，目前仅 Kimi for Coding 平台提供这些服务。
+`SearchWeb` 和 `FetchURL` 工具依赖外部服务，目前仅 Kimi Code 平台提供这些服务。
 
-使用 `/setup` 选择 Kimi for Coding 平台时，搜索和抓取服务会自动配置。
+使用 `/setup` 选择 Kimi Code 平台时，搜索和抓取服务会自动配置。
 
 | 服务 | 对应工具 | 未配置时的行为 |
 | --- | --- | --- |

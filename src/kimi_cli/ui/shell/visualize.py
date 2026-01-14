@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager, suppress
 from typing import NamedTuple
 
 import streamingjson  # type: ignore[reportMissingTypeStubs]
-from kosong.message import ContentPart, TextPart, ThinkPart, ToolCall, ToolCallPart
-from kosong.tooling import BriefDisplayBlock, ToolError, ToolOk, ToolResult, ToolReturnValue
+from kosong.message import Message
+from kosong.tooling import ToolError, ToolOk
 from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.markup import escape
@@ -20,19 +20,28 @@ from kimi_cli.tools import extract_key_argument
 from kimi_cli.ui.shell.console import console
 from kimi_cli.ui.shell.keyboard import KeyEvent, listen_for_keyboard
 from kimi_cli.utils.aioqueue import QueueShutDown
+from kimi_cli.utils.message import message_stringify
 from kimi_cli.utils.rich.columns import BulletColumns
 from kimi_cli.utils.rich.markdown import Markdown
 from kimi_cli.wire import WireUISide
-from kimi_cli.wire.display import TodoDisplayBlock
-from kimi_cli.wire.message import (
+from kimi_cli.wire.types import (
     ApprovalRequest,
     ApprovalRequestResolved,
+    BriefDisplayBlock,
     CompactionBegin,
     CompactionEnd,
+    ContentPart,
     StatusUpdate,
     StepBegin,
     StepInterrupted,
     SubagentEvent,
+    TextPart,
+    ThinkPart,
+    TodoDisplayBlock,
+    ToolCall,
+    ToolCallPart,
+    ToolResult,
+    ToolReturnValue,
     TurnBegin,
     WireMessage,
 )
@@ -73,7 +82,7 @@ class _ContentBlock:
                 self.raw_text,
                 style="grey50 italic" if self.is_think else "",
             ),
-            bullet_style="grey50",
+            bullet_style="grey50" if self.is_think else None,
         )
 
     def append(self, content: str) -> None:
@@ -285,7 +294,7 @@ class _ApprovalRequestPanel:
 
 class _StatusBlock:
     def __init__(self, initial: StatusUpdate) -> None:
-        self.text = Text("", justify="right", style="grey50")
+        self.text = Text("", justify="right")
         self.update(initial)
 
     def render(self) -> RenderableType:
@@ -403,7 +412,13 @@ class _LiveView:
 
         match msg:
             case TurnBegin():
-                pass
+                self.flush_content()
+                console.print(
+                    Panel(
+                        Text(message_stringify(Message(role="user", content=msg.user_input))),
+                        padding=(0, 1),
+                    )
+                )
             case CompactionBegin():
                 self._compacting_spinner = Spinner("balloon", "Compacting...")
                 self.refresh_soon()

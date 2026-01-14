@@ -25,6 +25,7 @@ kimi --config '{"default_model": "kimi-for-coding", "providers": {...}, "models"
 | 配置项 | 类型 | 说明 |
 | --- | --- | --- |
 | `default_model` | `string` | 默认使用的模型名称，必须是 `models` 中定义的模型 |
+| `default_thinking` | `boolean` | 默认是否开启 Thinking 模式（默认为 `false`） |
 | `providers` | `table` | API 供应商配置 |
 | `models` | `table` | 模型配置 |
 | `loop_control` | `table` | Agent 循环控制参数 |
@@ -35,6 +36,7 @@ kimi --config '{"default_model": "kimi-for-coding", "providers": {...}, "models"
 
 ```toml
 default_model = "kimi-for-coding"
+default_thinking = false
 
 [providers.kimi-for-coding]
 type = "kimi"
@@ -47,8 +49,9 @@ model = "kimi-for-coding"
 max_context_size = 262144
 
 [loop_control]
-max_steps_per_run = 100
+max_steps_per_turn = 100
 max_retries_per_step = 3
+max_ralph_iterations = 0
 
 [services.moonshot_search]
 base_url = "https://api.kimi.com/coding/v1/search"
@@ -111,8 +114,9 @@ capabilities = ["thinking", "image_in"]
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `max_steps_per_run` | `integer` | `100` | 单次运行最大步数 |
+| `max_steps_per_turn` | `integer` | `100` | 单轮最大步数（别名：`max_steps_per_run`） |
 | `max_retries_per_step` | `integer` | `3` | 单步最大重试次数 |
+| `max_ralph_iterations` | `integer` | `0` | 每个 User 消息后额外自动迭代次数；`0` 表示关闭；`-1` 表示无限 |
 
 ### `services`
 
@@ -139,7 +143,7 @@ capabilities = ["thinking", "image_in"]
 | `custom_headers` | `table` | 否 | 请求时附加的自定义 HTTP 头 |
 
 ::: tip 提示
-使用 `/setup` 命令配置 Kimi for Coding 平台时，搜索和抓取服务会自动配置。
+使用 `/setup` 命令配置 Kimi Code 平台时，搜索和抓取服务会自动配置。
 :::
 
 ### `mcp`
@@ -155,4 +159,3 @@ capabilities = ["thinking", "image_in"]
 如果 `~/.kimi/config.toml` 不存在但 `~/.kimi/config.json` 存在，Kimi CLI 会自动将 JSON 配置迁移到 TOML 格式，并将原文件备份为 `config.json.bak`。
 
 `--config-file` 指定的配置文件根据扩展名自动选择解析方式。`--config` 传入的配置内容会先尝试按 JSON 解析，失败后再尝试 TOML。
-
