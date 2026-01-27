@@ -84,7 +84,7 @@ test-kimi-sdk: ## Run kimi-sdk tests.
 	@echo "==> Running kimi-sdk tests"
 	@uv run --project sdks/kimi-sdk --directory sdks/kimi-sdk pytest tests -vv
 
-.PHONY: build build-kimi-cli build-kosong build-pykaos build-kimi-sdk build-bin
+.PHONY: build build-kimi-cli build-kosong build-pykaos build-kimi-sdk build-bin build-bin-onedir
 build: build-kimi-cli build-kosong build-pykaos build-kimi-sdk ## Build Python packages for release.
 build-kimi-cli: ## Build the kimi-cli and kimi-code sdists and wheels.
 	@echo "==> Building kimi-cli distributions"
@@ -100,9 +100,17 @@ build-pykaos: ## Build the pykaos sdist and wheel.
 build-kimi-sdk: ## Build the kimi-sdk sdist and wheel.
 	@echo "==> Building kimi-sdk distributions"
 	@uv build --package kimi-sdk --no-sources --out-dir dist/kimi-sdk
-build-bin: ## Build the standalone executable with PyInstaller.
-	@echo "==> Building PyInstaller binary"
+build-bin: ## Build the standalone executable with PyInstaller (one-file mode).
+	@echo "==> Building PyInstaller binary (one-file)"
 	@uv run pyinstaller kimi.spec
+	@mkdir -p dist/onefile
+	@if [ -f dist/kimi.exe ]; then mv dist/kimi.exe dist/onefile/; elif [ -f dist/kimi ]; then mv dist/kimi dist/onefile/; fi
+build-bin-onedir: ## Build the standalone executable with PyInstaller (one-dir mode).
+	@echo "==> Building PyInstaller binary (one-dir)"
+	@rm -rf dist/onedir dist/kimi
+	@uv run pyinstaller kimi.spec
+	@if [ -f dist/kimi/kimi-exe.exe ]; then mv dist/kimi/kimi-exe.exe dist/kimi/kimi.exe; elif [ -f dist/kimi/kimi-exe ]; then mv dist/kimi/kimi-exe dist/kimi/kimi; fi
+	@mkdir -p dist/onedir && mv dist/kimi dist/onedir/
 
 .PHONY: ai-test
 ai-test: ## Run the test suite with Kimi CLI.

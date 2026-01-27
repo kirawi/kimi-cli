@@ -4,6 +4,26 @@
 
 ## 未发布
 
+## 0.84 (2026-01-22)
+
+- Build：添加跨平台独立二进制构建，支持 Windows、macOS（含代码签名和公证）和 Linux（x86_64 和 ARM64）
+- Shell：修复斜杠命令自动补全在输入完整命令/别名时仍显示建议的问题
+- Tool：将 SVG 文件作为文本而非图片处理
+- Flow：支持 D2 markdown 块字符串（`|md` 语法），用于 Flow Skill 中的多行节点标签
+- Core：修复运行 `/reload`、`/setup` 或 `/clear` 后可能出现的 "event loop is closed" 错误
+- Core：修复在续接会话中使用 `/clear` 时的崩溃问题
+
+## 0.83 (2026-01-21)
+
+- Tool：添加 `ReadMediaFile` 工具用于读取图片/视频文件；`ReadFile` 现在仅用于读取文本文件
+- Skills：Flow Skills 现在也注册为 `/skill:<skill-name>` 命令（除了 `/flow:<skill-name>`）
+
+## 0.82 (2026-01-21)
+
+- Tool：`WriteFile` 和 `StrReplaceFile` 工具支持使用绝对路径编辑/写入工作目录外的文件
+- Tool：使用 Kimi 供应商时，视频文件上传到 Kimi Files API，使用 `ms://` 引用替代 inline data URL
+- Config：添加 `reserved_context_size` 配置项，自定义自动压缩触发阈值（默认 50000 tokens）
+
 ## 0.81 (2026-01-21)
 
 - Skills：添加 Flow Skill 类型，在 SKILL.md 中内嵌 Agent Flow（Mermaid/D2），通过 `/flow:<skill-name>` 命令调用
