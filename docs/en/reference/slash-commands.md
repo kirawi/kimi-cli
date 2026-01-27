@@ -1,6 +1,6 @@
 # Slash Commands
 
-Slash commands are built-in commands for Kimi CLI, used to control sessions, configuration, and debugging. Enter a command starting with `/` in the input box to trigger.
+Slash commands are built-in commands for Kimi Code CLI, used to control sessions, configuration, and debugging. Enter a command starting with `/` in the input box to trigger.
 
 ::: tip Shell mode
 Some slash commands are also available in shell mode, including `/help`, `/exit`, `/version`, `/changelog`, and `/feedback`.
@@ -16,7 +16,7 @@ Aliases: `/h`, `/?`
 
 ### `/version`
 
-Display Kimi CLI version number.
+Display Kimi Code CLI version number.
 
 ### `/changelog`
 
@@ -28,11 +28,23 @@ Alias: `/release-notes`
 
 Open the GitHub Issues page to submit feedback.
 
-## Configuration and debugging
+## Account and configuration
+
+### `/login`
+
+Log in to your Kimi account. This automatically opens a browser; complete account authorization and available models will be automatically configured. After successful login, Kimi Code CLI will automatically reload the configuration.
+
+::: tip
+This command is only available when using the default configuration file. If a configuration was specified via `--config` or `--config-file`, this command cannot be used.
+:::
+
+### `/logout`
+
+Log out from your Kimi account. This clears stored OAuth credentials and removes related configuration from the config file. After logout, Kimi Code CLI will automatically reload the configuration.
 
 ### `/setup`
 
-Start the configuration wizard to set up API platform and model.
+Start the configuration wizard to set up API platform and model using an API key.
 
 Configuration flow:
 1. Select an API platform (Kimi Code, Moonshot AI Open Platform, etc.)
@@ -47,7 +59,7 @@ Switch models and thinking mode.
 
 This command first refreshes the available models list from the API platform. When called without arguments, displays an interactive selection interface where you first select a model, then choose whether to enable thinking mode (if the model supports it).
 
-After selection, Kimi CLI will automatically update the configuration file and reload.
+After selection, Kimi Code CLI will automatically update the configuration file and reload.
 
 ::: tip
 This command is only available when using the default configuration file. If a configuration was specified via `--config` or `--config-file`, this command cannot be used.
@@ -55,7 +67,7 @@ This command is only available when using the default configuration file. If a c
 
 ### `/reload`
 
-Reload the configuration file without exiting Kimi CLI.
+Reload the configuration file without exiting Kimi Code CLI.
 
 ### `/debug`
 
@@ -102,7 +114,7 @@ Alias: `/reset`
 
 Manually compact the context to reduce token usage.
 
-When the context is too long, Kimi CLI will automatically trigger compaction. This command allows manually triggering the compaction process.
+When the context is too long, Kimi Code CLI will automatically trigger compaction. This command allows manually triggering the compaction process.
 
 ## Skills
 

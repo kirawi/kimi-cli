@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import kosong
@@ -41,6 +40,7 @@ from kimi_cli.tools.dmail import NAME as SendDMail_NAME
 from kimi_cli.tools.utils import ToolRejectedError
 from kimi_cli.utils.logging import logger
 from kimi_cli.utils.slashcmd import SlashCommand, parse_slash_command_call
+from kimi_cli.wire.file import WireFile
 from kimi_cli.wire.types import (
     ApprovalRequest,
     ApprovalResponse,
@@ -86,7 +86,7 @@ class TurnOutcome:
 
 
 class KimiSoul:
-    """The soul of Kimi CLI."""
+    """The soul of Kimi Code CLI."""
 
     def __init__(
         self,
@@ -168,7 +168,7 @@ class KimiSoul:
         return 0.0
 
     @property
-    def wire_file(self) -> Path:
+    def wire_file(self) -> WireFile:
         return self._runtime.session.wire_file
 
     async def _checkpoint(self):
@@ -179,6 +179,8 @@ class KimiSoul:
         return self._slash_commands
 
     async def run(self, user_input: str | list[ContentPart]):
+        await self._runtime.oauth.ensure_fresh(self._runtime)
+
         user_message = Message(role="user", content=user_input)
         text_input = user_message.extract_text(" ").strip()
 
@@ -335,10 +337,6 @@ class KimiSoul:
 
             wire_send(StepBegin(n=step_no))
             approval_task = asyncio.create_task(_pipe_approval_to_wire())
-            # FIXME: It's possible that a subagent's approval task steals approval request
-            # from the main agent. We must ensure that the Task tool will redirect them
-            # to the main wire. See `_SubWire` for more details. Later we need to figure
-            # out a better solution.
             back_to_the_future: BackToTheFuture | None = None
             step_outcome: StepOutcome | None = None
             try:
