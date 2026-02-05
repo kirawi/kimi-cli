@@ -48,6 +48,10 @@ def _read_user_texts(context_file: Path) -> list[str]:
     return texts
 
 
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def test_skill_prompt_injects_skill_text(tmp_path) -> None:
     skill_dir = tmp_path / "skills"
     skill_path = skill_dir / "test-skill"
@@ -112,6 +116,7 @@ def test_skill_prompt_injects_skill_text(tmp_path) -> None:
                         "message_id": None,
                     },
                 },
+                {"method": "event", "type": "TurnEnd", "payload": {}},
             ]
         )
     finally:
@@ -120,7 +125,7 @@ def test_skill_prompt_injects_skill_text(tmp_path) -> None:
     context_file = _session_dir(home_dir, work_dir, session_id) / "context.jsonl"
     user_texts = _read_user_texts(context_file)
     assert user_texts
-    assert user_texts[-1] == skill_text.strip()
+    assert _normalize_newlines(user_texts[-1]) == _normalize_newlines(skill_text.strip())
 
 
 def test_flow_skill(tmp_path) -> None:
@@ -197,6 +202,8 @@ def test_flow_skill(tmp_path) -> None:
                         "message_id": None,
                     },
                 },
+                {"method": "event", "type": "TurnEnd", "payload": {}},
+                {"method": "event", "type": "TurnEnd", "payload": {}},
             ]
         )
     finally:
@@ -351,6 +358,7 @@ def test_mcp_tool_call(tmp_path) -> None:
                         "message_id": None,
                     },
                 },
+                {"method": "event", "type": "TurnEnd", "payload": {}},
             ]
         )
     finally:

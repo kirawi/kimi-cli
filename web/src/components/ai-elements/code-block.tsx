@@ -12,9 +12,11 @@ import {
   type ComponentProps,
   createContext,
   type HTMLAttributes,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { BundledLanguage, ShikiTransformer } from "shiki";
@@ -259,6 +261,26 @@ export const CodeBlock = ({
 }: CodeBlockProps) => {
   const [html, setHtml] = useState<string>("");
   const [darkHtml, setDarkHtml] = useState<string>("");
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const checkOverflow = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el) {
+      setIsOverflowing(el.scrollHeight > el.clientHeight);
+    }
+  }, []);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    checkOverflow();
+
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [checkOverflow, html, darkHtml]);
   const {
     code: sanitizedCode,
     hadLineNumbers,
@@ -332,15 +354,22 @@ export const CodeBlock = ({
         )}
         {...props}
       >
-        {/* 图标固定在右上角，不随内容滚动 */}
-        <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Icons fixed at the top right, do not scroll with content */}
+        <div className="hover-reveal absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           {language === "html" && <CodeBlockPreviewButton />}
           <CodeBlockDownloadButton language={language} />
           <CodeBlockCopyButton />
           {children}
         </div>
-        {/* 滚动容器 */}
-        <div className="max-h-[60vh] overflow-auto overscroll-contain">
+
+        {/* Scrolling container: only contain overscroll when content overflows */}
+        <div
+          ref={scrollContainerRef}
+          className={cn(
+            "max-h-[60vh] overflow-auto",
+            isOverflowing && "overscroll-contain",
+          )}
+        >
           <div className="relative">
             {html ? (
               <div

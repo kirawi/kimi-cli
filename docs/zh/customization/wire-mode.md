@@ -26,7 +26,7 @@ Wire 模式主要用于：
 
 ## Wire 协议
 
-Wire 使用基于 JSON-RPC 2.0 的协议，通过 stdin/stdout 进行双向通信。当前协议版本为 `1.1`。每条消息是一行 JSON，符合 JSON-RPC 2.0 规范。
+Wire 使用基于 JSON-RPC 2.0 的协议，通过 stdin/stdout 进行双向通信。当前协议版本为 `1.2`。每条消息是一行 JSON，符合 JSON-RPC 2.0 规范。
 
 ### 协议类型定义
 
@@ -69,8 +69,8 @@ interface JSONRPCError {
 
 ### `initialize`
 
-::: info 新增于 Wire 1.1
-旧版 Client 可跳过此请求，直接发送 `prompt`。
+::: info 新增
+新增于 Wire 1.1。旧版 Client 可跳过此请求，直接发送 `prompt`。
 :::
 
 - **方向**：Client → Agent
@@ -314,6 +314,7 @@ type WireMessage = Event | Request
 /** 事件：通过 event 方法发送，无需响应 */
 type Event =
   | TurnBegin
+  | TurnEnd
   | StepBegin
   | StepInterrupted
   | CompactionBegin
@@ -338,6 +339,20 @@ type Request = ApprovalRequest | ToolCallRequest
 interface TurnBegin {
   /** 用户输入，可以是纯文本或内容片段数组 */
   user_input: string | ContentPart[]
+}
+```
+
+### `TurnEnd`
+
+::: info 新增
+新增于 Wire 1.2。
+:::
+
+轮次结束。此事件在轮次的所有其他事件之后发送。如果轮次被中断，此事件可能不会发送。
+
+```typescript
+interface TurnEnd {
+  // 无额外字段
 }
 ```
 
@@ -506,8 +521,8 @@ interface ToolReturnValue {
 
 ### `ApprovalResponse`
 
-::: info 重命名于 Wire 1.1
-原名 `ApprovalRequestResolved`，旧名称仍可使用以保持向后兼容。
+::: info 变更
+重命名于 Wire 1.1。原名 `ApprovalRequestResolved`，旧名称仍可使用以保持向后兼容。
 :::
 
 审批响应事件，表示审批请求已完成。
@@ -655,3 +670,84 @@ interface ShellDisplayBlock {
   command: string
 }
 ```
+
+## KAgent：Rust 版 Wire Server
+
+::: warning 注意
+KAgent 目前为实验性功能，API 和行为可能在后续版本中发生变化。
+:::
+
+KAgent 是 Kimi Code CLI 的 Rust 实现，专为 Wire 模式设计。如果你只需要 Wire 协议服务，KAgent 提供了一个更轻量的选择。
+
+### 特点
+
+- **Wire 协议完全兼容**：与 Python 版 `kimi --wire` 使用相同的 Wire 协议，现有客户端无需修改
+- **更小的体积**：单一静态链接二进制，无需 Python 运行时
+- **更快的启动**：原生编译，启动速度更快
+- **相同的配置**：使用相同的配置文件（`~/.kimi/config.toml`）和会话目录
+
+### 限制
+
+- **仅支持 Wire 模式**：没有 Shell/Print/ACP UI
+- **仅支持 Kimi 供应商**：不支持 OpenAI、Anthropic 等其他供应商
+- **无 Kimi 账号登录功能**：没有 `login`/`logout` 子命令和 `/login`、`/logout` 斜杠命令，需要手动配置 API 密钥
+- **不支持 `--prompt`/`--command`**：Wire 服务器不接受初始提示词
+- **仅支持本地执行**：没有 SSH Kaos 支持
+- **MCP OAuth 存储位置不同**：KAgent 存储在 `~/.kimi/credentials/mcp_auth.json`，Python 版存储在 `~/.fastmcp/oauth-mcp-client-cache/`，两者不兼容
+
+### 安装
+
+从 [GitHub Releases](https://github.com/MoonshotAI/kimi-cli/releases) 下载预编译的二进制文件：
+
+```sh
+# macOS (Apple Silicon)
+curl -L https://github.com/MoonshotAI/kimi-cli/releases/latest/download/kagent-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv kagent /usr/local/bin/
+
+# Linux (x86_64)
+curl -L https://github.com/MoonshotAI/kimi-cli/releases/latest/download/kagent-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv kagent /usr/local/bin/
+```
+
+### 使用
+
+KAgent 默认运行 Wire 模式：
+
+```sh
+kagent
+```
+
+常用选项与 `kimi` 命令相同：
+
+```sh
+# 指定工作目录
+kagent --work-dir /path/to/project
+
+# 继续上一个会话
+kagent --continue
+
+# 使用指定会话
+kagent --session <session-id>
+
+# 使用指定模型
+kagent --model k2
+
+# YOLO 模式（跳过审批）
+kagent --yolo
+```
+
+子命令：
+
+```sh
+# 显示版本和环境信息
+kagent info
+
+# 管理 MCP 服务器
+kagent mcp list
+kagent mcp add <name> <command> [args...]
+kagent mcp remove <name>
+```
+
+### 版本同步
+
+KAgent 与 Kimi Code CLI 使用相同的版本号，随每次发布同步更新。两者的 Wire 协议行为保持一致，你可以在它们之间自由切换。

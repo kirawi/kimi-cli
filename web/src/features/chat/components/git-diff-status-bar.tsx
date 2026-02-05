@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { getAuthHeader } from "@/lib/auth";
 import { isMacOS } from "@/hooks/utils";
 import { toast } from "sonner";
 import {
@@ -26,6 +27,8 @@ import {
   AppWindowIcon,
   CopyIcon,
 } from "lucide-react";
+
+const TRAILING_SLASHES_REGEX = /\/+$/;
 
 type GitDiffStatusBarProps = {
   stats: GitDiffStats | null;
@@ -65,7 +68,7 @@ const OPEN_TARGETS: OpenTarget[] = [
 async function openViaBackend(app: OpenTarget["backendApp"], path: string) {
   const response = await fetch("/api/open-in", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeader() },
     body: JSON.stringify({ app, path }),
   });
 
@@ -173,8 +176,8 @@ export const GitDiffStatusBar = memo(function GitDiffStatusBarComponent({
 }: GitDiffStatusBarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
-  // Don't render if not a git repo, no changes, or loading
-  if (!stats || !stats.isGitRepo || !stats.hasChanges || stats.error) {
+  // Don't render if not a git repo, no changes, no files, or has error
+  if (!((stats?.isGitRepo) && stats.hasChanges && stats.files) || stats.error) {
     return null;
   }
 
@@ -183,7 +186,7 @@ export const GitDiffStatusBar = memo(function GitDiffStatusBarComponent({
   // Build full path for a file
   const getFilePath = (relativePath: string) => {
     if (!workDir) return relativePath;
-    return `${workDir.replace(/\/+$/, "")}/${relativePath}`;
+    return `${workDir.replace(TRAILING_SLASHES_REGEX, "")}/${relativePath}`;
   };
 
   return (
@@ -210,8 +213,10 @@ export const GitDiffStatusBar = memo(function GitDiffStatusBarComponent({
           </span>
           {/* Open project button - visible on hover */}
           {workDir && (
-            <div className="opacity-0 group-hover/header:opacity-100 transition-opacity duration-150">
-              <OpenInButton path={workDir} />
+            <div className="hidden lg:block">
+              <div className="hover-reveal opacity-0 group-hover/header:opacity-100 transition-opacity duration-150">
+                <OpenInButton path={workDir} />
+              </div>
             </div>
           )}
           <div className="flex-1" />
@@ -243,8 +248,10 @@ export const GitDiffStatusBar = memo(function GitDiffStatusBarComponent({
               </span>
               {/* Open file button - visible on hover */}
               {workDir && (
-                <div className="opacity-0 group-hover/file:opacity-100 transition-opacity duration-150 flex-shrink-0">
-                  <OpenInButton path={getFilePath(file.path)} />
+                <div className="hidden lg:block">
+                  <div className="hover-reveal opacity-0 group-hover/file:opacity-100 transition-opacity duration-150 flex-shrink-0">
+                    <OpenInButton path={getFilePath(file.path)} />
+                  </div>
                 </div>
               )}
             </div>

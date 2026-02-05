@@ -116,6 +116,7 @@ import {
 import type { ChatStatus, ToolUIPart } from "ai";
 import type { LiveMessage, MessageAttachmentPart } from "./types";
 import type { SessionStatus } from "@/lib/api/models";
+import { getAuthToken } from "@/lib/auth";
 import {
   type ContentPart,
   type TokenUsage,
@@ -130,6 +131,7 @@ import {
   extractEvent,
 } from "./wireTypes";
 import { createMessageId, getApiBaseUrl } from "./utils";
+import { kimiCliVersion } from "@/lib/version";
 import { handleToolResult } from "@/features/tool/store";
 import { v4 as uuidV4 } from "uuid";
 
@@ -144,6 +146,12 @@ const LEGACY_UPLOADS_REGEX = /`uploads\/([^`]+)`/;
 const HTTP_TO_WS_REGEX = /^http/;
 const NEWLINE_REGEX = /\r?\n/;
 
+export type SlashCommandDef = {
+  name: string;
+  description: string;
+  aliases: string[];
+};
+
 type UseSessionStreamOptions = {
   /** Session ID to connect to */
   sessionId: string | null;
@@ -157,6 +165,8 @@ type UseSessionStreamOptions = {
   onError?: (error: Error) => void;
   /** Callback when session status changes */
   onSessionStatus?: (status: SessionStatus) => void;
+  /** Callback when first turn is complete (for auto-renaming) */
+  onFirstTurnComplete?: () => void;
 };
 
 type UseSessionStreamReturn = {
@@ -200,6 +210,8 @@ type UseSessionStreamReturn = {
   clearMessages: () => void;
   /** Connection error if any */
   error: Error | null;
+  /** Available slash commands from the server */
+  slashCommands: SlashCommandDef[];
 };
 
 type PendingApprovalEntry = {
@@ -223,6 +235,7 @@ export function useSessionStream(
     onConnectionChange,
     onError,
     onSessionStatus,
+    onFirstTurnComplete,
   } = options;
 
   const [messages, setMessagesInternal] = useState<LiveMessage[]>([]);
@@ -237,6 +250,7 @@ export function useSessionStream(
   const [error, setError] = useState<Error | null>(null);
   const [isAwaitingFirstResponse, setIsAwaitingFirstResponse] = useState(false);
   const [isReplayingHistory, setIsReplayingHistory] = useState(true);
+  const [slashCommands, setSlashCommands] = useState<SlashCommandDef[]>([]);
 
   // Refs
   /**
@@ -263,6 +277,13 @@ export function useSessionStream(
   const awaitingFirstResponseRef = useRef(false); // Track if waiting for first event of a turn
   const lastStatusSeqRef = useRef<number | null>(null);
 
+  // First turn tracking for auto-rename (simplified: backend reads from wire.jsonl)
+  const hasTurnStartedRef = useRef(false); // Whether at least one turn has started
+  const firstTurnCompleteCalledRef = useRef(false); // Whether onFirstTurnComplete was called
+
+  // Initialize message tracking
+  const initializeIdRef = useRef<string | null>(null);
+
   // Current state accumulators
   const currentThinkingRef = useRef("");
   const currentTextRef = useRef("");
@@ -273,6 +294,9 @@ export function useSessionStream(
   const pendingApprovalRequestsRef = useRef<Map<string, PendingApprovalEntry>>(
     new Map(),
   );
+
+  // Track if current turn is a /clear command (needs UI clear on turn end)
+  const pendingClearRef = useRef(false);
 
   // Wrapped setMessages
   const setMessages: typeof setMessagesInternal = useCallback((action) => {
@@ -348,6 +372,12 @@ export function useSessionStream(
           setAwaitingFirstResponse(false);
           awaitingIdleRef.current = false;
           completeStreamingMessages();
+
+          // Trigger onFirstTurnComplete only after at least one turn has completed
+          if (hasTurnStartedRef.current && !firstTurnCompleteCalledRef.current) {
+            firstTurnCompleteCalledRef.current = true;
+            onFirstTurnComplete?.();
+          }
           break;
         }
       }
@@ -357,6 +387,7 @@ export function useSessionStream(
       normalizeSessionStatus,
       onSessionStatus,
       setAwaitingFirstResponse,
+      onFirstTurnComplete,
     ],
   );
 
@@ -404,9 +435,11 @@ export function useSessionStream(
         return undefined;
       }
       const basePath = baseUrl ?? getApiBaseUrl();
+      const token = getAuthToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
       return `${basePath}/api/sessions/${encodeURIComponent(
         sessionId,
-      )}/uploads/${encodeURIComponent(filename)}`;
+      )}/uploads/${encodeURIComponent(filename)}${tokenParam}`;
     },
     [baseUrl, sessionId],
   );
@@ -685,6 +718,7 @@ export function useSessionStream(
     currentToolCallsRef.current.clear();
     currentToolCallIdRef.current = null;
     pendingApprovalRequestsRef.current.clear();
+    pendingClearRef.current = false;
     setCurrentStep(0);
     setContextUsage(0);
     setTokenUsage(null);
@@ -694,6 +728,10 @@ export function useSessionStream(
     isReplayingRef.current = true;
     setIsReplayingHistory(true);
     setAwaitingFirstResponse(false);
+    setSlashCommands([]);
+    // Reset first turn tracking
+    hasTurnStartedRef.current = false;
+    firstTurnCompleteCalledRef.current = false;
   }, [resetStepState, setAwaitingFirstResponse]);
 
   // Process a single wire event
@@ -701,7 +739,20 @@ export function useSessionStream(
     (event: WireEvent, isReplay = false, rpcMessageId?: string | number) => {
       switch (event.type) {
         case "TurnBegin": {
+          // Reset step state to ensure slash commands create new messages
+          resetStepState();
+
           const parsedUserInput = parseUserInput(event.payload.user_input);
+
+          // Track that at least one turn has started (for auto-rename trigger)
+          if (!isReplay) {
+            hasTurnStartedRef.current = true;
+          }
+
+          // Check if this is a /clear or /reset command (needs UI clear)
+          const userText = parsedUserInput.text.trim();
+          pendingClearRef.current =
+            userText === "/clear" || userText === "/reset";
 
           // Add user message
           const userMessageId = getNextMessageId("user");
@@ -1176,6 +1227,21 @@ export function useSessionStream(
               messageId,
             });
           }
+
+          // Clear UI for /clear command (triggered by StatusUpdate after clear)
+          if (pendingClearRef.current) {
+            pendingClearRef.current = false;
+            setMessages((prev) => {
+              let lastUserMsgIndex = -1;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].role === "user") {
+                  lastUserMsgIndex = i;
+                  break;
+                }
+              }
+              return lastUserMsgIndex >= 0 ? prev.slice(lastUserMsgIndex) : [];
+            });
+          }
           break;
         }
 
@@ -1198,10 +1264,39 @@ export function useSessionStream(
         }
 
         case "StepInterrupted": {
+          // Clear pending approval requests
+          pendingApprovalRequestsRef.current.clear();
+
           setMessages((prev) =>
-            prev.map((msg) =>
-              msg.isStreaming ? { ...msg, isStreaming: false } : msg,
-            ),
+            prev.map((msg) => {
+              let updated = msg;
+              if (msg.isStreaming) {
+                updated = { ...updated, isStreaming: false };
+              }
+              // Update pending approval tool states to denied
+              if (
+                msg.variant === "tool" &&
+                msg.toolCall?.state === "approval-requested"
+              ) {
+                return {
+                  ...updated,
+                  toolCall: {
+                    ...msg.toolCall,
+                    state: "output-denied",
+                    approval: msg.toolCall.approval
+                      ? {
+                          ...msg.toolCall.approval,
+                          submitted: true,
+                          resolved: true,
+                          approved: false,
+                          response: "reject",
+                        }
+                      : undefined,
+                  },
+                };
+              }
+              return updated;
+            }),
           );
           setAwaitingFirstResponse(false);
           if (awaitingIdleRef.current) {
@@ -1213,8 +1308,21 @@ export function useSessionStream(
         }
 
         case "CompactionBegin":
-        case "CompactionEnd":
           // Could show compaction indicator if needed
+          break;
+
+        case "CompactionEnd":
+          // Clear old messages after compaction, only keep the current turn
+          setMessages((prev) => {
+            let lastUserMsgIndex = -1;
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].role === "user") {
+                lastUserMsgIndex = i;
+                break;
+              }
+            }
+            return lastUserMsgIndex >= 0 ? prev.slice(lastUserMsgIndex) : [];
+          });
           break;
 
         default:
@@ -1230,6 +1338,7 @@ export function useSessionStream(
       safeStringify,
       clearAwaitingFirstResponse,
       updateMessageById,
+      setAwaitingFirstResponse,
     ],
   );
 
@@ -1243,6 +1352,14 @@ export function useSessionStream(
 
         // Check for JSON-RPC error response
         if (message.error) {
+          // Initialize failure during busy session is non-fatal - just skip
+          if (message.id === initializeIdRef.current) {
+            console.warn("[SessionStream] Initialize rejected (session busy), continuing...");
+            initializeIdRef.current = null;
+            return;
+          }
+
+          // Other errors remain fatal
           console.error("[SessionStream] Received error:", message.error);
           const err = new Error(message.error.message || "Unknown error");
           setError(err);
@@ -1305,6 +1422,19 @@ export function useSessionStream(
           return;
         }
 
+        // Handle initialize response
+        if (message.id && message.id === initializeIdRef.current && message.result) {
+          console.log("[SessionStream] Initialize response received:", message.result);
+          initializeIdRef.current = null;
+
+          // Extract slash commands
+          const { slash_commands } = message.result;
+          if (slash_commands) {
+            setSlashCommands(slash_commands);
+          }
+          return;
+        }
+
         // Handle approval requests sent as JSON-RPC requests
         if (message.method === "request") {
           const params = message.params as {
@@ -1352,16 +1482,19 @@ export function useSessionStream(
   // Build WebSocket URL
   const getWebSocketUrl = useCallback(
     (sid: string): string => {
+      const token = getAuthToken();
       if (baseUrl) {
         // Convert HTTP URL to WebSocket URL
         const url = baseUrl.replace(HTTP_TO_WS_REGEX, "ws");
-        return `${url}/api/sessions/${sid}/stream`;
+        const wsUrl = `${url}/api/sessions/${sid}/stream`;
+        return token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl;
       }
 
       // Use current host
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
-      return `${protocol}//${host}/api/sessions/${sid}/stream`;
+      const wsUrl = `${protocol}//${host}/api/sessions/${sid}/stream`;
+      return token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl;
     },
     [baseUrl],
   );
@@ -1391,6 +1524,26 @@ export function useSessionStream(
     },
     [setAwaitingFirstResponse],
   );
+
+  // Helper to send initialize message
+  const sendInitialize = useCallback((ws: WebSocket) => {
+    const id = uuidV4();
+    initializeIdRef.current = id;
+    const message = {
+      jsonrpc: "2.0",
+      method: "initialize",
+      id,
+      params: {
+        protocol_version: "1.2",
+        client: {
+          name: "kiwi",
+          version: kimiCliVersion,
+        },
+      },
+    };
+    ws.send(JSON.stringify(message));
+    console.log("[SessionStream] Sent initialize message");
+  }, []);
 
   const respondToApproval = useCallback(
     async (
@@ -1525,6 +1678,9 @@ export function useSessionStream(
         awaitingIdleRef.current = false;
         setStatus("streaming"); // Will receive replay, then switch to ready
 
+        // Send initialize message to get slash commands
+        sendInitialize(ws);
+
         // Send pending message immediately after connection
         sendPendingMessage(ws);
       };
@@ -1603,6 +1759,7 @@ export function useSessionStream(
     getWebSocketUrl,
     handleMessage,
     onError,
+    sendInitialize,
     sendPendingMessage,
     setAwaitingFirstResponse,
   ]);
@@ -1646,9 +1803,70 @@ export function useSessionStream(
       );
       awaitingIdleRef.current = false;
       pendingMessageRef.current = null;
+      // Clear pending approval requests and update message states
+      pendingApprovalRequestsRef.current.clear();
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (
+            msg.variant === "tool" &&
+            msg.toolCall?.state === "approval-requested"
+          ) {
+            return {
+              ...msg,
+              isStreaming: false,
+              toolCall: {
+                ...msg.toolCall,
+                state: "output-denied",
+                approval: msg.toolCall.approval
+                  ? {
+                      ...msg.toolCall.approval,
+                      submitted: true,
+                      resolved: true,
+                      approved: false,
+                      response: "reject",
+                    }
+                  : undefined,
+              },
+            };
+          }
+          return msg;
+        }),
+      );
       disconnect();
       return;
     }
+
+    // Clear all pending approval requests and update message states
+    pendingApprovalRequestsRef.current.clear();
+
+    // Always update messages (consistent with StepInterrupted handler)
+    setMessages((prev) =>
+      prev.map((msg) => {
+        if (
+          msg.variant === "tool" &&
+          msg.toolCall?.state === "approval-requested"
+        ) {
+          return {
+            ...msg,
+            isStreaming: false,
+            toolCall: {
+              ...msg.toolCall,
+              state: "output-denied",
+              approval: msg.toolCall.approval
+                ? {
+                    ...msg.toolCall.approval,
+                    submitted: true,
+                    resolved: true,
+                    approved: false,
+                    response: "reject",
+                  }
+                : undefined,
+            },
+          };
+        }
+        return msg;
+      }),
+    );
 
     const cancelMessage: JsonRpcRequest = {
       jsonrpc: "2.0",
@@ -1668,7 +1886,7 @@ export function useSessionStream(
     } catch (err) {
       console.error("[SessionStream] Failed to send cancel request:", err);
     }
-  }, [status, disconnect, setAwaitingFirstResponse]);
+  }, [status, disconnect, setAwaitingFirstResponse, setMessages]);
 
   // Reconnect
   const reconnect = useCallback(() => {
@@ -1795,5 +2013,6 @@ export function useSessionStream(
     setMessages,
     clearMessages,
     error,
+    slashCommands,
   };
 }

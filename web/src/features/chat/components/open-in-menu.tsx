@@ -7,6 +7,7 @@ import {
   SquareTerminalIcon,
   TerminalIcon,
   AppWindowIcon,
+  ChevronUpIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,6 +26,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isMacOS } from "@/hooks/utils";
+import { getAuthHeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 type OpenInMenuProps = {
@@ -36,7 +38,7 @@ type OpenTarget = {
   id: string;
   label: string;
   icon: ReactNode;
-  backendApp: "finder" | "cursor" | "vscode" | "iterm" | "terminal";
+  backendApp: "finder" | "cursor" | "vscode" | "iterm" | "terminal" | "antigravity";
   macOnly?: boolean;
   shortcut?: string;
 };
@@ -71,7 +73,7 @@ function compactPath(path: string, maxLength = 22): string {
 async function openViaBackend(app: OpenTarget["backendApp"], path: string) {
   const response = await fetch("/api/open-in", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeader() },
     body: JSON.stringify({ app, path }),
   });
 
@@ -116,6 +118,12 @@ export function OpenInMenu({ workDir, className }: OpenInMenuProps) {
         label: "VS Code",
         icon: <CodeIcon className="size-4" />,
         backendApp: "vscode",
+      },
+      {
+        id: "antigravity",
+        label: "Antigravity",
+        icon: <ChevronUpIcon className="size-4" />,
+        backendApp: "antigravity",
       },
       {
         id: "iterm",

@@ -11,6 +11,10 @@ import {
 import type { Session } from "@/lib/api/models";
 import type { AssistantApprovalHandler } from "./assistant-message";
 import {
+  ActivityStatusIndicator,
+  type ActivityDetail,
+} from "./activity-status-indicator";
+import {
   ArrowDownIcon,
   Loader2Icon,
   PlusIcon,
@@ -38,6 +42,7 @@ type ChatConversationProps = {
   onCreateSession?: () => void;
   isSearchOpen: boolean;
   onSearchOpenChange: (open: boolean) => void;
+  activityStatus?: ActivityDetail;
 };
 
 export function ChatConversation({
@@ -53,6 +58,7 @@ export function ChatConversation({
   onCreateSession,
   isSearchOpen,
   onSearchOpenChange,
+  activityStatus,
 }: ChatConversationProps) {
   const listRef = useRef<VirtualizedMessageListHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -77,6 +83,36 @@ export function ChatConversation({
     // Clear highlight after a delay
     setTimeout(() => setHighlightedIndex(-1), 2000);
   }, []);
+
+  // Auto-scroll to bottom when history replay completes after a session switch
+  const pendingScrollSessionRef = useRef<string | null>(null);
+  const wasReplayingRef = useRef(isReplayingHistory);
+
+  // When session changes, mark that we need to scroll once replay completes
+  useEffect(() => {
+    if (selectedSessionId) {
+      pendingScrollSessionRef.current = selectedSessionId;
+    }
+  }, [selectedSessionId]);
+
+  // When replay completes (transition from true to false), scroll to bottom if pending
+  useEffect(() => {
+    const replayJustCompleted = wasReplayingRef.current && !isReplayingHistory;
+    wasReplayingRef.current = isReplayingHistory;
+
+    if (
+      replayJustCompleted &&
+      selectedSessionId &&
+      pendingScrollSessionRef.current === selectedSessionId
+    ) {
+      pendingScrollSessionRef.current = null;
+      // Delay to ensure Virtuoso has rendered after key change
+      const timeoutId = setTimeout(() => {
+        listRef.current?.scrollToBottom();
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isReplayingHistory, selectedSessionId]);
 
   const handleScrollToBottom = useCallback(() => {
     listRef.current?.scrollToBottom();
@@ -183,9 +219,21 @@ export function ChatConversation({
         </div>
       )}
 
+      {/* Floating activity status indicator */}
+      {activityStatus && activityStatus.status !== "idle" && (
+        <div className="absolute bottom-[calc(1rem+var(--safe-bottom))] left-4">
+          <div className="rounded-full bg-background/80 backdrop-blur-sm border border-border px-3 py-1.5 shadow-sm">
+            <ActivityStatusIndicator
+              activity={activityStatus}
+              showDescription
+            />
+          </div>
+        </div>
+      )}
+
       {shouldShowScrollButton ? (
         <Button
-          className="absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full"
+          className="absolute bottom-[calc(1rem+var(--safe-bottom))] left-[50%] -translate-x-1/2 rounded-full"
           onClick={handleScrollToBottom}
           size="icon"
           type="button"

@@ -16,15 +16,19 @@ import type { PromptInputMessage } from "@ai-elements";
 import type { GitDiffStats, Session } from "@/lib/api/models";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { MEDIA_CONFIG } from "@/config/media";
 
 import { FileMentionMenu } from "../file-mention-menu";
 import { useFileMentions } from "../useFileMentions";
+import { SlashCommandMenu } from "../slash-command-menu";
+import { useSlashCommands, type SlashCommandDef } from "../useSlashCommands";
 import { GitDiffStatusBar } from "./git-diff-status-bar";
 import { Loader2Icon, SquareIcon, Maximize2Icon, Minimize2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { GlobalConfigControls } from "@/features/chat/global-config-controls";
 import {
   type ChangeEvent,
+  type KeyboardEvent,
   type ReactElement,
   type SyntheticEvent,
   memo,
@@ -49,6 +53,7 @@ type ChatPromptComposerProps = {
   ) => Promise<SessionFileEntry[]>;
   gitDiffStats?: GitDiffStats | null;
   isGitDiffLoading?: boolean;
+  slashCommands?: SlashCommandDef[];
 };
 
 export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
@@ -63,6 +68,7 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
   onListSessionDirectory,
   gitDiffStats,
   isGitDiffLoading,
+  slashCommands = [],
 }: ChatPromptComposerProps): ReactElement {
   const promptController = usePromptInputController();
   const attachmentContext = usePromptInputAttachments();
@@ -93,26 +99,62 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
     listDirectory: onListSessionDirectory,
   });
 
+  const {
+    isOpen: isSlashOpen,
+    query: slashQuery,
+    options: slashOptions,
+    activeIndex: slashActiveIndex,
+    setActiveIndex: setSlashActiveIndex,
+    handleTextChange: handleSlashTextChange,
+    handleCaretChange: handleSlashCaretChange,
+    handleKeyDown: handleSlashKeyDown,
+    selectOption: selectSlashOption,
+    closeMenu: closeSlashMenu,
+  } = useSlashCommands({
+    text: promptController.textInput.value,
+    setText: promptController.textInput.setInput,
+    textareaRef,
+    commands: slashCommands,
+  });
+
   const handleTextareaChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
-      handleMentionTextChange(
-        event.currentTarget.value,
-        event.currentTarget.selectionStart,
-      );
+      const value = event.currentTarget.value;
+      const caret = event.currentTarget.selectionStart;
+      handleMentionTextChange(value, caret);
+      handleSlashTextChange(value, caret);
     },
-    [handleMentionTextChange],
+    [handleMentionTextChange, handleSlashTextChange],
   );
 
   const handleTextareaSelection = useCallback(
     (event: SyntheticEvent<HTMLTextAreaElement>) => {
-      handleMentionCaretChange(event.currentTarget.selectionStart);
+      const caret = event.currentTarget.selectionStart;
+      handleMentionCaretChange(caret);
+      handleSlashCaretChange(caret);
     },
-    [handleMentionCaretChange],
+    [handleMentionCaretChange, handleSlashCaretChange],
   );
 
   const handleTextareaBlur = useCallback(() => {
     closeMentionMenu();
-  }, [closeMentionMenu]);
+    closeSlashMenu();
+  }, [closeMentionMenu, closeSlashMenu]);
+
+  const handleTextareaKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Priority: slash menu first, then mention menu
+      if (isSlashOpen) {
+        handleSlashKeyDown(event);
+        return;
+      }
+      if (isMentionOpen) {
+        handleMentionKeyDown(event);
+        return;
+      }
+    },
+    [isSlashOpen, isMentionOpen, handleSlashKeyDown, handleMentionKeyDown],
+  );
 
   const handleFileError = useCallback(
     (err: { code: string; message: string }) => {
@@ -127,19 +169,19 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
 
   return (
     <div className="w-full">
-      <div className="w-full px-2">
+      <div className="w-full px-1 sm:px-2">
         <GitDiffStatusBar
           stats={gitDiffStats ?? null}
           isLoading={isGitDiffLoading}
           workDir={currentSession?.workDir}
         />
-
       </div>
 
       <PromptInput
         accept="*"
         className="w-full [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-border"
         multiple
+        maxFiles={MEDIA_CONFIG.maxCount}
         onSubmit={onSubmit}
         onError={handleFileError}
       >
@@ -148,7 +190,7 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
           <button
             type="button"
             onClick={handleToggleExpand}
-            disabled={!canSendMessage || !currentSession}
+            disabled={!(canSendMessage && currentSession)}
             className="absolute top-2 right-2 z-10 p-1 cursor-pointer rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             aria-label={isExpanded ? "Collapse input" : "Expand input"}
           >
@@ -176,7 +218,9 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
                 ref={textareaRef}
                 className={cn(
                   "transition-all duration-200 pr-8",
-                  isExpanded ? "min-h-[300px] max-h-[60vh]" : "min-h-16 max-h-48",
+                  isExpanded
+                    ? "min-h-[220px] max-h-[60vh] sm:min-h-[300px]"
+                    : "min-h-[80px] max-h-36 sm:min-h-16 sm:max-h-48",
                 )}
                 placeholder={
                   !currentSession
@@ -192,10 +236,20 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
                 onKeyUp={handleTextareaSelection}
                 onClick={handleTextareaSelection}
                 onBlur={handleTextareaBlur}
-                onKeyDown={handleMentionKeyDown}
+                onKeyDown={handleTextareaKeyDown}
               />
+              {/* Slash command menu - mutually exclusive with file mention menu */}
+              <SlashCommandMenu
+                open={isSlashOpen && canSendMessage && !isMentionOpen}
+                query={slashQuery}
+                options={slashOptions}
+                activeIndex={slashActiveIndex}
+                onSelect={selectSlashOption}
+                onHover={setSlashActiveIndex}
+              />
+              {/* File mention menu - only show when slash menu is not open */}
               <FileMentionMenu
-                open={isMentionOpen && canSendMessage}
+                open={isMentionOpen && canSendMessage && !isSlashOpen}
                 query={mentionQuery}
                 sections={mentionSections}
                 flatOptions={mentionOptions}
@@ -212,8 +266,8 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
             </div>
           </div>
         </PromptInputBody>
-        <PromptInputFooter className="w-full justify-between py-1 border-none bg-transparent shadow-none">
-          <PromptInputTools>
+        <PromptInputFooter className="w-full gap-2 py-1 border-none bg-transparent shadow-none">
+          <PromptInputTools className="flex-1 min-w-0 flex-wrap">
             <GlobalConfigControls />
           </PromptInputTools>
           {isStreaming ? (
@@ -227,6 +281,7 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
               }}
               size="icon-sm"
               variant="default"
+              className="shrink-0"
             >
               <SquareIcon className="size-4" />
             </PromptInputButton>
@@ -239,6 +294,7 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
                 isUploading ||
                 !currentSession
               }
+              className="shrink-0"
             />
           )}
         </PromptInputFooter>

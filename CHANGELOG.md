@@ -11,6 +11,47 @@ Only write entries that are worth mentioning to users.
 
 ## Unreleased
 
+- Web: Add session archive feature with auto-archive for sessions older than 15 days
+- Web: Add multi-select mode for bulk archive, unarchive, and delete operations
+- Web: Update `last_session_id` for work directory when session stream starts
+- Web: Fix approval request states not updating when session is interrupted or cancelled
+- Web: Add activity status indicator showing agent state (processing, waiting for approval, etc.)
+- Web: Fix IME composition issue when selecting slash commands
+- Web: Fix UI not clearing messages after `/clear`, `/reset`, or `/compact` commands
+- Core: Update context token count after compaction completes
+- Build: Fix subprocess library path conflicts in PyInstaller-frozen builds on Linux
+
+## 1.8.0 (2026-02-05)
+
+- CLI: Fix startup errors (e.g. invalid config files) being silently swallowed instead of displayed
+
+## 1.7.0 (2026-02-05)
+
+- Rust: Add `kagent`, the Rust implementation of Kimi agent kernel with wire-mode support (experimental)
+- Auth: Fix OAuth token refresh conflicts when running multiple sessions simultaneously
+- Web: Add file mention menu (`@`) to reference uploaded attachments and workspace files with autocomplete
+- Web: Add slash command menu in chat input with autocomplete, keyboard navigation, and alias support
+- Web: Prompt to create directory when specified path doesn't exist during session creation
+- Web: Fix authentication token persistence by switching from sessionStorage to localStorage with 24-hour expiry
+- Web: Add server-side pagination for session list with virtualized scrolling for better performance
+- Web: Improve session and work directories loading with smarter caching and invalidation
+- Web: Fix WebSocket errors during history replay by checking connection state before sending
+- Web: Git diff status bar now shows untracked files (new files not yet added to git)
+- Web: Restrict sensitive APIs only in public mode; update origin enforcement logic
+
+## 1.6 (2026-02-03)
+
+- Web: Add token-based authentication and access control for network mode (`--network`, `--lan-only`, `--public`)
+- Web: Add security options: `--auth-token`, `--allowed-origins`, `--restrict-sensitive-apis`, `--dangerously-omit-auth`
+- Web: Change `--host` option to bind to specific IP address; add automatic network address detection
+- Web: Fix WebSocket disconnect when creating new sessions
+- Web: Increase maximum image dimension from 1024 to 4096 pixels
+- Web: Improve UI responsiveness with enhanced hover effects and better layout handling
+- Wire: Add `TurnEnd` event to signal the completion of an agent turn (protocol version 1.2)
+- Core: Fix custom agent prompt files containing `$` causing silent startup failure
+
+## 1.5 (2026-01-30)
+
 - Web: Add Git diff status bar showing uncommitted changes in session working directory
 - Web: Add "Open in" menu for opening files/directories in Terminal, VS Code, Cursor, or other local applications
 - Web: Add search functionality to filter sessions by title or working directory

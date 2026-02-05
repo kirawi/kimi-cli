@@ -47,6 +47,9 @@ type ChatWorkspaceContainerProps = {
   onGetSessionFileUrl?: (sessionId: string, path: string) => string;
   onGetSessionFile?: (sessionId: string, path: string) => Promise<Blob>;
   onOpenCreateDialog?: () => void;
+  onOpenSidebar?: () => void;
+  generateTitle?: (sessionId: string) => Promise<string | null>;
+  onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
 };
 
 export function ChatWorkspaceContainer({
@@ -60,6 +63,9 @@ export function ChatWorkspaceContainer({
   onGetSessionFileUrl,
   onGetSessionFile,
   onOpenCreateDialog,
+  onOpenSidebar,
+  generateTitle,
+  onRenameSession,
 }: ChatWorkspaceContainerProps): ReactElement {
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   // Pending message state for when we need to create a session first
@@ -74,11 +80,22 @@ export function ChatWorkspaceContainer({
     });
   }, []);
 
+  // Handle first turn completion for auto-rename
+  // Backend reads messages from wire.jsonl automatically
+  const handleFirstTurnComplete = useCallback(async () => {
+    if (!(selectedSessionId && generateTitle)) {
+      return;
+    }
+
+    await generateTitle(selectedSessionId);
+  }, [selectedSessionId, generateTitle]);
+
   const sessionStream = useSessionStream({
     sessionId,
     baseUrl: getApiBaseUrl(),
     onError: handleStreamError,
     onSessionStatus,
+    onFirstTurnComplete: handleFirstTurnComplete,
   });
 
   const {
@@ -93,6 +110,7 @@ export function ChatWorkspaceContainer({
     currentStep,
     isConnected: isStreamConnected,
     isReplayingHistory,
+    slashCommands,
   } = sessionStream;
 
   const clearNewFiles = useToolEventsStore((state) => state.clearNewFiles);
@@ -282,6 +300,9 @@ export function ChatWorkspaceContainer({
       onListSessionDirectory={onListSessionDirectory}
       onGetSessionFileUrl={onGetSessionFileUrl}
       onGetSessionFile={onGetSessionFile}
+      onOpenSidebar={onOpenSidebar}
+      onRenameSession={onRenameSession}
+      slashCommands={slashCommands}
     />
   );
 }

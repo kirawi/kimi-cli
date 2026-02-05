@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -22,14 +23,27 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from kimi_cli.metadata import load_metadata, save_metadata
 from kimi_cli.session import Session as KimiCLISession
-from kimi_cli.web.models import GitDiffStats, GitFileDiff, Session, SessionStatus
+from kimi_cli.utils.subprocess_env import get_clean_env
+from kimi_cli.web.auth import is_origin_allowed, is_private_ip, verify_token
+from kimi_cli.web.models import (
+    GenerateTitleRequest,
+    GenerateTitleResponse,
+    GitDiffStats,
+    GitFileDiff,
+    Session,
+    SessionStatus,
+    UpdateSessionRequest,
+)
 from kimi_cli.web.runner.messages import send_history_complete
 from kimi_cli.web.runner.process import KimiCLIRunner
 from kimi_cli.web.store.sessions import (
     JointSession,
     invalidate_sessions_cache,
-    load_all_sessions_cached,
     load_session_by_id,
+    load_session_metadata,
+    load_sessions_page,
+    run_auto_archive,
+    save_session_metadata,
 )
 from kimi_cli.wire.jsonrpc import (
     ErrorCodes,
@@ -46,6 +60,35 @@ work_dirs_router = APIRouter(prefix="/api/work-dirs", tags=["work-dirs"])
 
 # Constants
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+DEFAULT_MAX_PUBLIC_PATH_DEPTH = 6
+SENSITIVE_PATH_PARTS = {
+    "id_rsa",
+    "id_ed25519",
+    "known_hosts",
+    "credentials",
+    ".aws",
+    ".ssh",
+    ".gnupg",
+    ".kube",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+}
+SENSITIVE_PATH_EXTENSIONS = {
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".kdbx",
+    ".der",
+}
+# Home directory patterns to detect if resolved path escapes to sensitive locations
+SENSITIVE_HOME_PATHS = {
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+}
 
 
 def sanitize_filename(filename: str) -> str:
@@ -84,6 +127,69 @@ def get_editable_session(
             detail="Session is busy. Please wait for it to complete before modifying.",
         )
     return session
+
+
+def _relative_parts(path: Path) -> list[str]:
+    return [part for part in path.parts if part not in {"", "."}]
+
+
+def _is_sensitive_relative_path(rel_path: Path) -> bool:
+    parts = _relative_parts(rel_path)
+    for part in parts:
+        if part.startswith("."):
+            return True
+        if part.lower() in SENSITIVE_PATH_PARTS:
+            return True
+    return rel_path.suffix.lower() in SENSITIVE_PATH_EXTENSIONS
+
+
+def _contains_symlink(path: Path, base: Path) -> bool:
+    """Check if any component of the path (relative to base) is a symlink."""
+    try:
+        current = base
+        rel_parts = path.relative_to(base).parts
+        for part in rel_parts:
+            current = current / part
+            if current.is_symlink():
+                return True
+    except (ValueError, OSError):
+        return True
+    return False
+
+
+def _is_path_in_sensitive_location(path: Path) -> bool:
+    """Check if resolved path points to a sensitive location (e.g., ~/.ssh, ~/.aws)."""
+    try:
+        home = Path.home()
+        if path.is_relative_to(home):
+            rel_to_home = path.relative_to(home)
+            first_part = rel_to_home.parts[0] if rel_to_home.parts else ""
+            if first_part in SENSITIVE_HOME_PATHS:
+                return True
+    except (ValueError, RuntimeError):
+        pass
+    return False
+
+
+def _ensure_public_file_access_allowed(
+    rel_path: Path,
+    restrict_sensitive_apis: bool,
+    max_path_depth: int = DEFAULT_MAX_PUBLIC_PATH_DEPTH,
+) -> None:
+    if not restrict_sensitive_apis:
+        return
+    rel_parts = _relative_parts(rel_path)
+    if len(rel_parts) > max_path_depth:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Path too deep for public access "
+            f"(max depth: {max_path_depth}, current: {len(rel_parts)}).",
+        )
+    if _is_sensitive_relative_path(rel_path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access to sensitive files is disabled.",
+        )
 
 
 async def replay_history(ws: WebSocket, session_dir: Path) -> None:
@@ -125,9 +231,34 @@ async def replay_history(ws: WebSocket, session_dir: Path) -> None:
 
 
 @router.get("/", summary="List all sessions")
-async def list_sessions(runner: KimiCLIRunner = Depends(get_runner)) -> list[Session]:
-    """List all sessions."""
-    sessions = load_all_sessions_cached()
+async def list_sessions(
+    runner: KimiCLIRunner = Depends(get_runner),
+    limit: int = 100,
+    offset: int = 0,
+    q: str | None = None,
+    archived: bool | None = None,
+) -> list[Session]:
+    """List sessions with optional pagination and search.
+
+    Args:
+        limit: Maximum number of sessions to return (default 100, max 500).
+        offset: Number of sessions to skip (default 0).
+        q: Optional search query to filter by title or work_dir.
+        archived: Filter by archived status.
+            - None (default): Only return non-archived sessions.
+            - True: Only return archived sessions.
+    """
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+    if offset < 0:
+        offset = 0
+
+    # Run auto-archive in background (throttled internally, runs at most once per 5 minutes)
+    await asyncio.to_thread(run_auto_archive)
+
+    sessions = load_sessions_page(limit=limit, offset=offset, query=q, archived=archived)
     for session in sessions:
         session_process = runner.get_session(session.session_id)
         session.is_running = session_process is not None and session_process.is_running
@@ -157,10 +288,26 @@ async def create_session(request: CreateSessionRequest | None = None) -> Session
         work_dir_path = Path(request.work_dir)
         # Validate the directory exists
         if not work_dir_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Directory does not exist: {request.work_dir}",
-            )
+            if request.create_dir:
+                # Auto-create the directory
+                try:
+                    work_dir_path.mkdir(parents=True, exist_ok=True)
+                except PermissionError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Permission denied: cannot create directory {request.work_dir}",
+                    ) from e
+                except OSError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to create directory: {e}",
+                    ) from e
+            else:
+                # Return 404 to indicate directory does not exist
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Directory does not exist: {request.work_dir}",
+                )
         if not work_dir_path.is_dir():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -172,6 +319,7 @@ async def create_session(request: CreateSessionRequest | None = None) -> Session
     kimi_cli_session = await KimiCLISession.create(work_dir=work_dir)
     context_file = kimi_cli_session.dir / "context.jsonl"
     invalidate_sessions_cache()
+    invalidate_work_dirs_cache()
     return Session(
         session_id=UUID(kimi_cli_session.id),
         title=kimi_cli_session.title,
@@ -195,6 +343,7 @@ class CreateSessionRequest(BaseModel):
     """Create session request."""
 
     work_dir: str | None = None
+    create_dir: bool = False  # Whether to auto-create directory if it doesn't exist
 
 
 class UploadSessionFileResponse(BaseModel):
@@ -296,6 +445,7 @@ async def get_session_upload_file(
 async def get_session_file(
     session_id: UUID,
     path: str,
+    request: Request,
 ) -> Response:
     """Get a file or list directory from session work directory."""
     session = load_session_by_id(session_id)
@@ -307,12 +457,39 @@ async def get_session_file(
 
     # Security check: prevent path traversal attacks using resolve()
     work_dir = Path(str(session.kimi_cli_session.work_dir)).resolve()
-    file_path = (work_dir / path).resolve()
+    requested_path = work_dir / path
+    file_path = requested_path.resolve()
+
+    # Check path traversal
     if not file_path.is_relative_to(work_dir):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid path: path traversal not allowed",
         )
+
+    rel_path = file_path.relative_to(work_dir)
+    restrict_sensitive_apis = getattr(request.app.state, "restrict_sensitive_apis", False)
+    max_path_depth = (
+        getattr(request.app.state, "max_public_path_depth", None) or DEFAULT_MAX_PUBLIC_PATH_DEPTH
+    )
+
+    # Additional security checks when restricting sensitive APIs
+    if restrict_sensitive_apis:
+        # Check for symlinks in the path
+        if _contains_symlink(requested_path, work_dir):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Symbolic links are not allowed in public mode.",
+            )
+
+        # Check if resolved path points to sensitive location
+        if _is_path_in_sensitive_location(file_path):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access to sensitive system directories is not allowed.",
+            )
+
+    _ensure_public_file_access_allowed(rel_path, restrict_sensitive_apis, max_path_depth)
 
     if not file_path.exists():
         raise HTTPException(
@@ -323,6 +500,10 @@ async def get_session_file(
     if file_path.is_dir():
         result: list[dict[str, str | int]] = []
         for subpath in file_path.iterdir():
+            if restrict_sensitive_apis:
+                rel_subpath = rel_path / subpath.name
+                if _is_sensitive_relative_path(rel_subpath):
+                    continue
             if subpath.is_dir():
                 result.append({"name": subpath.name, "type": "directory"})
             else:
@@ -346,6 +527,21 @@ async def get_session_file(
     )
 
 
+def _update_last_session_id(session: JointSession) -> None:
+    """Update last_session_id for the session's work directory."""
+    kimi_session = session.kimi_cli_session
+    work_dir = kimi_session.work_dir
+
+    metadata = load_metadata()
+    work_dir_meta = metadata.get_work_dir_meta(work_dir)
+
+    if work_dir_meta is None:
+        work_dir_meta = metadata.new_work_dir_meta(work_dir)
+
+    work_dir_meta.last_session_id = kimi_session.id
+    save_metadata(metadata)
+
+
 @router.delete("/{session_id}", summary="Delete a session")
 async def delete_session(session_id: UUID, runner: KimiCLIRunner = Depends(get_runner)) -> None:
     """Delete a session."""
@@ -367,6 +563,241 @@ async def delete_session(session_id: UUID, runner: KimiCLIRunner = Depends(get_r
     invalidate_sessions_cache()
 
 
+@router.patch("/{session_id}", summary="Update session")
+async def update_session(
+    session_id: UUID,
+    request: UpdateSessionRequest,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> Session:
+    """Update a session (e.g., rename title or archive/unarchive)."""
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+
+    # Load existing metadata
+    metadata = load_session_metadata(session_dir, str(session_id))
+
+    # Update title if provided
+    if request.title is not None:
+        metadata = metadata.model_copy(update={"title": request.title})
+
+    # Update archived status if provided
+    if request.archived is not None:
+        updates: dict[str, bool | float | None] = {"archived": request.archived}
+        if request.archived:
+            # User manually archived: set archived_at, reset auto_archive_exempt
+            updates["archived_at"] = time.time()
+            updates["auto_archive_exempt"] = False
+        else:
+            # User manually unarchived: clear archived_at, set auto_archive_exempt
+            # This prevents the session from being auto-archived again
+            updates["archived_at"] = None
+            updates["auto_archive_exempt"] = True
+        metadata = metadata.model_copy(update=updates)
+
+    # Save metadata
+    save_session_metadata(session_dir, metadata)
+
+    # Invalidate cache to force reload
+    invalidate_sessions_cache()
+
+    # Return updated session
+    updated_session = load_session_by_id(session_id)
+    if updated_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reload session after update",
+        )
+    return updated_session
+
+
+def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
+    """Extract the first turn's user message and assistant response from wire.jsonl.
+
+    Returns:
+        tuple[str, str] | None: (user_message, assistant_response) or None if not found
+    """
+    wire_file = session_dir / "wire.jsonl"
+    if not wire_file.exists():
+        return None
+
+    user_message: str | None = None
+    assistant_response_parts: list[str] = []
+    in_first_turn = False
+
+    try:
+        with open(wire_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    message = record.get("message", {})
+                    msg_type = message.get("type")
+
+                    if msg_type == "TurnBegin":
+                        if in_first_turn:
+                            # Second turn started, stop
+                            break
+                        in_first_turn = True
+                        user_input = message.get("payload", {}).get("user_input")
+                        if user_input:
+                            from kosong.message import Message
+
+                            msg = Message(role="user", content=user_input)
+                            user_message = msg.extract_text(" ")
+
+                    elif msg_type == "ContentPart" and in_first_turn:
+                        payload = message.get("payload", {})
+                        if payload.get("type") == "text" and payload.get("text"):
+                            assistant_response_parts.append(payload["text"])
+
+                    elif msg_type == "TurnEnd" and in_first_turn:
+                        break
+
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+
+    if user_message and assistant_response_parts:
+        return (user_message, "".join(assistant_response_parts))
+    return None
+
+
+@router.post("/{session_id}/generate-title", summary="Generate session title using AI")
+async def generate_session_title(
+    session_id: UUID,
+    request: GenerateTitleRequest | None = None,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> GenerateTitleResponse:
+    """Generate a concise session title using AI based on the first conversation turn.
+
+    If request body is empty or parameters are missing, the backend will
+    automatically read the first turn from wire.jsonl.
+    """
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+
+    # Load existing metadata
+    metadata = load_session_metadata(session_dir, str(session_id))
+
+    # Check if title was already generated (avoid duplicate calls)
+    if metadata.title_generated:
+        return GenerateTitleResponse(title=metadata.title)
+
+    # Get message content: prefer request parameters, otherwise read from wire.jsonl
+    user_message = request.user_message if request else None
+    assistant_response = request.assistant_response if request else None
+
+    if not user_message or not assistant_response:
+        first_turn = extract_first_turn_from_wire(session_dir)
+        if first_turn:
+            user_message, assistant_response = first_turn
+
+    # If still no user message, return default title
+    if not user_message:
+        return GenerateTitleResponse(title="Untitled")
+
+    # Fallback title from user message (used if AI generation fails)
+    from textwrap import shorten
+
+    user_text = user_message.strip()
+    user_text = " ".join(user_text.split())
+    fallback_title = shorten(user_text, width=50, placeholder="...") or "Untitled"
+
+    # If AI generation failed too many times, use fallback and mark as generated
+    if metadata.title_generate_attempts >= 3:
+        metadata = metadata.model_copy(
+            update={
+                "title": fallback_title,
+                "title_generated": True,
+            }
+        )
+        save_session_metadata(session_dir, metadata)
+        invalidate_sessions_cache()
+        return GenerateTitleResponse(title=fallback_title)
+
+    # Try to generate title using AI
+    title = fallback_title
+    ai_generated = False
+    try:
+        from kosong import generate
+        from kosong.message import Message
+
+        from kimi_cli.config import load_config
+        from kimi_cli.llm import create_llm
+
+        config = load_config()
+        model_name = config.default_model
+
+        if model_name and model_name in config.models:
+            model_config = config.models[model_name]
+            provider_config = config.providers.get(model_config.provider)
+
+            if provider_config:
+                llm = create_llm(provider_config, model_config)
+
+                if llm:
+                    system_prompt = (
+                        "Generate a concise session title (max 50 characters) "
+                        "based on the conversation. "
+                        "Only respond with the title text, nothing else. "
+                        "No quotes, no explanation."
+                    )
+
+                    prompt = f"""User: {user_message[:300]}
+Assistant: {(assistant_response or "")[:300]}
+
+Title:"""
+
+                    result = await generate(
+                        chat_provider=llm.chat_provider,
+                        system_prompt=system_prompt,
+                        tools=[],
+                        history=[Message(role="user", content=prompt)],
+                    )
+
+                    generated_title = result.message.extract_text().strip()
+                    # Remove quotes if present
+                    generated_title = generated_title.strip("\"'")
+
+                    if generated_title and len(generated_title) <= 50:
+                        title = generated_title
+                        ai_generated = True
+                    elif generated_title:
+                        title = shorten(generated_title, width=50, placeholder="...")
+                        ai_generated = True
+
+    except Exception as e:
+        logger.warning(f"Failed to generate title using AI: {e}")
+        # Keep fallback_title, ai_generated stays False
+
+    # Save the title to metadata
+    if ai_generated:
+        # AI succeeded: set title_generated = True
+        metadata = metadata.model_copy(
+            update={
+                "title": title,
+                "title_generated": True,
+            }
+        )
+    else:
+        # AI failed: increment attempts counter
+        metadata = metadata.model_copy(
+            update={
+                "title": title,
+                "title_generate_attempts": metadata.title_generate_attempts + 1,
+            }
+        )
+    save_session_metadata(session_dir, metadata)
+
+    # Invalidate cache
+    invalidate_sessions_cache()
+
+    return GenerateTitleResponse(title=title)
+
+
 @router.websocket("/{session_id}/stream")
 async def session_stream(
     session_id: UUID,
@@ -384,6 +815,30 @@ async def session_stream(
     6. Forward incoming messages to the subprocess
     7. Clean up on disconnect
     """
+    expected_token = getattr(websocket.app.state, "session_token", None)
+    enforce_origin = getattr(websocket.app.state, "enforce_origin", False)
+    allowed_origins = getattr(websocket.app.state, "allowed_origins", [])
+    lan_only = getattr(websocket.app.state, "lan_only", False)
+
+    # LAN-only check
+    if lan_only:
+        client_ip = websocket.client.host if websocket.client else None
+        if client_ip and not is_private_ip(client_ip):
+            await websocket.close(code=4403, reason="Access denied: LAN only")
+            return
+
+    if enforce_origin:
+        origin = websocket.headers.get("origin")
+        if origin and not is_origin_allowed(origin, allowed_origins):
+            await websocket.close(code=4403, reason="Origin not allowed")
+            return
+
+    if expected_token:
+        token = websocket.query_params.get("token")
+        if not verify_token(token, expected_token):
+            await websocket.close(code=4401, reason="Auth required")
+            return
+
     await websocket.accept()
 
     # Check if session exists
@@ -412,7 +867,10 @@ async def session_stream(
             except Exception as e:
                 logger.warning(f"Failed to replay history: {e}")
 
-        await send_history_complete(websocket)
+        # Check if WebSocket is still connected before continuing
+        if not await send_history_complete(websocket):
+            logger.debug("WebSocket disconnected during history replay")
+            return
 
         # Ensure work_dir exists
         work_dir = Path(str(session.kimi_cli_session.work_dir))
@@ -429,6 +887,9 @@ async def session_stream(
         await session_process.end_replay(websocket)
         await session_process.start()
         await session_process.send_status_snapshot(websocket)
+
+        # Update last_session_id for this work directory
+        _update_last_session_id(session)
 
         # Forward incoming messages to the subprocess
         while True:
@@ -468,9 +929,31 @@ async def session_stream(
             await session_process.remove_websocket(websocket)
 
 
-@work_dirs_router.get("/", summary="List available work directories")
-async def get_work_dirs() -> list[str]:
-    """Get a list of available work directories from metadata."""
+# Work dirs cache
+_work_dirs_cache: list[str] | None = None
+_work_dirs_cache_time: float = 0.0
+_WORK_DIRS_CACHE_TTL = 30.0  # seconds
+
+
+def invalidate_work_dirs_cache() -> None:
+    """Clear the work dirs cache."""
+    global _work_dirs_cache, _work_dirs_cache_time
+    _work_dirs_cache = None
+    _work_dirs_cache_time = 0.0
+
+
+def _get_work_dirs_sync() -> list[str]:
+    """Synchronous helper for get_work_dirs (runs in thread pool)."""
+    import time
+
+    global _work_dirs_cache, _work_dirs_cache_time
+
+    # Check cache
+    now = time.time()
+    if _work_dirs_cache is not None and (now - _work_dirs_cache_time) < _WORK_DIRS_CACHE_TTL:
+        return _work_dirs_cache
+
+    # Build fresh list
     metadata = load_metadata()
     work_dirs: list[str] = []
     for wd in metadata.work_dirs:
@@ -480,8 +963,18 @@ async def get_work_dirs() -> list[str]:
         # Verify directory exists
         if Path(wd.path).exists():
             work_dirs.append(wd.path)
-    # Return at most 20 directories
-    return work_dirs[:20]
+
+    # Update cache
+    result = work_dirs[:20]
+    _work_dirs_cache = result
+    _work_dirs_cache_time = now
+    return result
+
+
+@work_dirs_router.get("/", summary="List available work directories")
+async def get_work_dirs() -> list[str]:
+    """Get a list of available work directories from metadata."""
+    return await asyncio.to_thread(_get_work_dirs_sync)
 
 
 @work_dirs_router.get("/startup", summary="Get the startup directory")
@@ -504,6 +997,9 @@ async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
         return GitDiffStats(is_git_repo=False)
 
     try:
+        files: list[GitFileDiff] = []
+        total_add, total_del = 0, 0
+
         # Check if HEAD exists (repo has at least one commit)
         check_proc = await asyncio.create_subprocess_exec(
             "git",
@@ -513,50 +1009,83 @@ async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
             cwd=str(work_dir),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            env=get_clean_env(),
         )
         await check_proc.wait()
-        if check_proc.returncode != 0:
-            # No commits yet, return empty diff
-            return GitDiffStats(is_git_repo=True, has_changes=False)
+        has_head = check_proc.returncode == 0
 
-        # Execute git diff --numstat HEAD (including staged and unstaged)
-        proc = await asyncio.create_subprocess_exec(
+        if has_head:
+            # Execute git diff --numstat HEAD (including staged and unstaged)
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "diff",
+                "--numstat",
+                "HEAD",
+                cwd=str(work_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=get_clean_env(),
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+
+            # Parse output
+            for line in stdout.decode().strip().split("\n"):
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    add = int(parts[0]) if parts[0] != "-" else 0
+                    dele = int(parts[1]) if parts[1] != "-" else 0
+                    total_add += add
+                    total_del += dele
+                    # Determine file status
+                    file_status: str = "modified"
+                    if dele == 0 and add > 0:
+                        file_status = "added"
+                    elif add == 0 and dele > 0:
+                        file_status = "deleted"
+                    files.append(
+                        GitFileDiff(
+                            path=parts[2],
+                            additions=add,
+                            deletions=dele,
+                            status=file_status,  # type: ignore[arg-type]
+                        )
+                    )
+
+        # Also get untracked files (new files not yet added to git)
+        untracked_proc = await asyncio.create_subprocess_exec(
             "git",
-            "diff",
-            "--numstat",
-            "HEAD",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
             cwd=str(work_dir),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=get_clean_env(),
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        untracked_stdout, _ = await asyncio.wait_for(untracked_proc.communicate(), timeout=5.0)
 
-        # Parse output
-        files: list[GitFileDiff] = []
-        total_add, total_del = 0, 0
-        for line in stdout.decode().strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 3:
-                add = int(parts[0]) if parts[0] != "-" else 0
-                dele = int(parts[1]) if parts[1] != "-" else 0
-                total_add += add
-                total_del += dele
-                # Determine file status
-                file_status: str = "modified"
-                if dele == 0 and add > 0:
-                    file_status = "added"
-                elif add == 0 and dele > 0:
-                    file_status = "deleted"
+        # Add untracked files to the result
+        for line in untracked_stdout.decode().strip().split("\n"):
+            if line:
                 files.append(
                     GitFileDiff(
-                        path=parts[2],
-                        additions=add,
-                        deletions=dele,
-                        status=file_status,  # type: ignore[arg-type]
+                        path=line,
+                        additions=0,  # Cannot count lines for untracked files
+                        deletions=0,
+                        status="added",
                     )
                 )
+
+        if not has_head:
+            return GitDiffStats(
+                is_git_repo=True,
+                has_changes=len(files) > 0,
+                total_additions=0,
+                total_deletions=0,
+                files=files,
+            )
 
         return GitDiffStats(
             is_git_repo=True,

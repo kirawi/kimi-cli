@@ -2,6 +2,8 @@ import {
   memo,
   type ReactElement,
   useCallback,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 import type { ChatStatus } from "ai";
@@ -9,13 +11,21 @@ import type { PromptInputMessage } from "@ai-elements";
 import type { ApprovalResponseDecision, TokenUsage } from "@/hooks/wireTypes";
 import type { LiveMessage } from "@/hooks/types";
 import type { SessionFileEntry } from "@/hooks/useSessions";
+import type { SlashCommandDef } from "@/hooks/useSessionStream";
 import type { Session } from "@/lib/api/models";
+
+// Re-export SlashCommandDef for convenience
+export type { SlashCommandDef };
 import { toast } from "sonner";
 import { ChatWorkspaceHeader } from "./components/chat-workspace-header";
 import { ChatConversation } from "./components/chat-conversation";
 import { ChatPromptComposer } from "./components/chat-prompt-composer";
 import { ApprovalDialog } from "./components/approval-dialog";
 import { useGitDiffStats } from "@/hooks/useGitDiffStats";
+import {
+  deriveActivityStatus,
+  type ActivityDetail,
+} from "./components/activity-status-indicator";
 
 // Re-export LiveMessage type from hooks for backward compatibility
 export type { LiveMessage } from "@/hooks/types";
@@ -59,6 +69,12 @@ type ChatWorkspaceProps = {
   isAwaitingFirstResponse?: boolean;
   /** Create a new session when none is selected */
   onCreateSession?: () => void;
+  /** Open sessions sidebar (mobile) */
+  onOpenSidebar?: () => void;
+  /** Rename session */
+  onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
+  /** Available slash commands */
+  slashCommands?: SlashCommandDef[];
 };
 
 type ToolApproval = NonNullable<LiveMessage["toolCall"]>["approval"];
@@ -82,6 +98,9 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   isUploadingFiles = false,
   isAwaitingFirstResponse = false,
   onCreateSession,
+  onOpenSidebar,
+  onRenameSession,
+  slashCommands = [],
 }: ChatWorkspaceProps): ReactElement {
   const [blocksExpanded, setBlocksExpanded] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -93,6 +112,32 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   const { stats: gitDiffStats, isLoading: isGitDiffLoading } = useGitDiffStats(
     currentSession?.sessionId ?? null
   );
+
+  // Derive activity status for the header indicator
+  // Use ref to cache the previous result and avoid unnecessary object reference changes
+  const prevActivityRef = useRef<ActivityDetail | null>(null);
+
+  const activityStatus = useMemo(() => {
+    const newStatus = deriveActivityStatus({
+      chatStatus: status,
+      isAwaitingFirstResponse,
+      isUploadingFiles,
+      messages,
+    });
+
+    // If status and description haven't changed, return cached reference
+    // to avoid unnecessary re-renders in downstream components
+    if (
+      prevActivityRef.current &&
+      prevActivityRef.current.status === newStatus.status &&
+      prevActivityRef.current.description === newStatus.description
+    ) {
+      return prevActivityRef.current;
+    }
+
+    prevActivityRef.current = newStatus;
+    return newStatus;
+  }, [status, isAwaitingFirstResponse, isUploadingFiles, messages]);
 
   const maxTokens = 64000;
   const usedTokens = Math.round(contextUsage * maxTokens);
@@ -133,7 +178,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   );
 
   return (
-    <div className=" sticky top-4 flex h-full min-h-[560px] w-full flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden lg:sticky lg:top-4 lg:min-h-[560px]">
       <div className="relative flex h-full flex-col">
         <ChatWorkspaceHeader
           currentStep={currentStep}
@@ -147,9 +192,11 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
           usagePercent={usagePercent}
           maxTokens={maxTokens}
           tokenUsage={tokenUsage}
+          onOpenSidebar={onOpenSidebar}
+          onRenameSession={onRenameSession}
         />
 
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden min-h-0">
           <ChatConversation
             messages={messages}
             status={status}
@@ -166,6 +213,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
             onCreateSession={onCreateSession}
             isSearchOpen={isSearchOpen}
             onSearchOpenChange={setIsSearchOpen}
+            activityStatus={activityStatus}
           />
         </div>
 
@@ -177,21 +225,24 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
           canRespondToApproval={Boolean(onApprovalResponse)}
         />
 
-        <div className="mt-auto px-3 pb-3 pt-3">
-          <ChatPromptComposer
-            status={status}
-            onSubmit={onSubmit}
-            canSendMessage={canSendMessage}
-            currentSession={currentSession}
-            isUploading={isUploading}
-            isStreaming={isStreaming}
-            isAwaitingIdle={isAwaitingIdle}
-            onCancel={onCancel}
-            onListSessionDirectory={onListSessionDirectory}
-            gitDiffStats={gitDiffStats}
-            isGitDiffLoading={isGitDiffLoading}
-          />
-        </div>
+        {currentSession && (
+          <div className="mt-auto flex-shrink-0 px-0 pb-0 pt-0 sm:px-3 sm:pb-3 sm:pt-3">
+            <ChatPromptComposer
+              status={status}
+              onSubmit={onSubmit}
+              canSendMessage={canSendMessage}
+              currentSession={currentSession}
+              isUploading={isUploading}
+              isStreaming={isStreaming}
+              isAwaitingIdle={isAwaitingIdle}
+              onCancel={onCancel}
+              onListSessionDirectory={onListSessionDirectory}
+              gitDiffStats={gitDiffStats}
+              isGitDiffLoading={isGitDiffLoading}
+              slashCommands={slashCommands}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
