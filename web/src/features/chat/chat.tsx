@@ -75,6 +75,8 @@ type ChatWorkspaceProps = {
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
   /** Available slash commands */
   slashCommands?: SlashCommandDef[];
+  /** Maximum context size for the current model (tokens) */
+  maxContextSize?: number;
   /** Fork session at a specific turn */
   onForkSession?: (turnIndex: number) => void;
 };
@@ -102,6 +104,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   onCreateSession,
   onOpenSidebar,
   onRenameSession,
+  maxContextSize,
   slashCommands = [],
   onForkSession,
 }: ChatWorkspaceProps): ReactElement {
@@ -124,6 +127,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
     const newStatus = deriveActivityStatus({
       chatStatus: status,
       isAwaitingFirstResponse,
+      isReplayingHistory,
       isUploadingFiles,
       messages,
     });
@@ -140,9 +144,9 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
 
     prevActivityRef.current = newStatus;
     return newStatus;
-  }, [status, isAwaitingFirstResponse, isUploadingFiles, messages]);
+  }, [status, isAwaitingFirstResponse, isReplayingHistory, isUploadingFiles, messages]);
 
-  const maxTokens = 64000;
+  const maxTokens = maxContextSize ?? 64000;
   const usedTokens = Math.round(contextUsage * maxTokens);
   const usagePercent = Math.round(contextUsage * 100);
 
@@ -180,6 +184,23 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
     [onApprovalResponse],
   );
 
+  // Wrapper for ApprovalDialog that routes through handleApprovalAction
+  // so pendingApprovalMap is properly managed (prevents duplicate requests)
+  const handleDialogApprovalResponse = useCallback(
+    async (requestId: string, decision: ApprovalResponseDecision) => {
+      for (const message of messages) {
+        if (
+          message.variant === "tool" &&
+          message.toolCall?.approval?.id === requestId
+        ) {
+          await handleApprovalAction(message.toolCall.approval, decision);
+          return;
+        }
+      }
+    },
+    [messages, handleApprovalAction],
+  );
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden lg:sticky lg:top-4 lg:min-h-[560px]">
       <div className="relative flex h-full flex-col">
@@ -191,10 +212,6 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
           blocksExpanded={blocksExpanded}
           onToggleBlocks={() => setBlocksExpanded((prev) => !prev)}
           onOpenSearch={() => setIsSearchOpen(true)}
-          usedTokens={usedTokens}
-          usagePercent={usagePercent}
-          maxTokens={maxTokens}
-          tokenUsage={tokenUsage}
           onOpenSidebar={onOpenSidebar}
           onRenameSession={onRenameSession}
         />
@@ -215,7 +232,6 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
             onCreateSession={onCreateSession}
             isSearchOpen={isSearchOpen}
             onSearchOpenChange={setIsSearchOpen}
-            activityStatus={activityStatus}
             onForkSession={onForkSession}
           />
         </div>
@@ -223,13 +239,13 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
         {/* Approval Dialog - shows above input when approval is needed */}
         <ApprovalDialog
           messages={messages}
-          onApprovalResponse={onApprovalResponse}
+          onApprovalResponse={handleDialogApprovalResponse}
           pendingApprovalMap={pendingApprovalMap}
           canRespondToApproval={Boolean(onApprovalResponse)}
         />
 
         {currentSession && (
-          <div className="mt-auto flex-shrink-0 px-0 pb-0 pt-0 sm:px-3 sm:pb-3 sm:pt-3">
+          <div className="mt-auto flex-shrink-0 px-0 pb-0 pt-0 sm:px-3 sm:pb-3 ">
             <ChatPromptComposer
               status={status}
               onSubmit={onSubmit}
@@ -238,11 +254,17 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
               isUploading={isUploading}
               isStreaming={isStreaming}
               isAwaitingIdle={isAwaitingIdle}
+              isReplayingHistory={isReplayingHistory}
               onCancel={onCancel}
               onListSessionDirectory={onListSessionDirectory}
               gitDiffStats={gitDiffStats}
               isGitDiffLoading={isGitDiffLoading}
               slashCommands={slashCommands}
+              activityStatus={activityStatus}
+              usagePercent={usagePercent}
+              usedTokens={usedTokens}
+              maxTokens={maxTokens}
+              tokenUsage={tokenUsage}
             />
           </div>
         )}

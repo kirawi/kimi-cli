@@ -1,18 +1,5 @@
-import { useMemo } from "react";
-import { GitBranchIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import type { ApprovalResponseDecision } from "@/hooks/wireTypes";
 import type { LiveMessage } from "@/hooks/types";
 import {
@@ -35,6 +22,7 @@ import {
   Reasoning,
   ReasoningContent,
   ReasoningTrigger,
+  SubagentActivity,
   Tool,
   ToolContent,
   ToolDisplay,
@@ -43,6 +31,7 @@ import {
   ToolMediaPreview,
   ToolOutput,
 } from "@ai-elements";
+import { BrainIcon, ChevronRightIcon } from "lucide-react";
 
 export type ToolApproval = NonNullable<LiveMessage["toolCall"]>["approval"];
 
@@ -52,7 +41,7 @@ export type AssistantApprovalHandler = (
 ) => void | Promise<void>;
 
 const assistantContentClass =
-  "w-full max-w-full text-sm leading-relaxed";
+  "w-full max-w-full text-sm leading-relaxed overflow-visible";
 const assistantMetaTextClass = "text-xs text-muted-foreground";
 
 type AssistantMessageProps = {
@@ -61,8 +50,6 @@ type AssistantMessageProps = {
   onApprovalAction?: AssistantApprovalHandler;
   canRespondToApproval: boolean;
   blocksExpanded: boolean;
-  /** Callback to fork session from this message's turn */
-  onForkSession?: () => void;
 };
 
 export function AssistantMessage({
@@ -71,7 +58,6 @@ export function AssistantMessage({
   onApprovalAction,
   canRespondToApproval,
   blocksExpanded,
-  onForkSession,
 }: AssistantMessageProps) {
   const content = useMemo(() => {
     switch (message.variant) {
@@ -90,7 +76,7 @@ export function AssistantMessage({
       case "thinking":
         return renderThinkingMessage(message, blocksExpanded);
       default:
-        return renderAssistantText(message, onForkSession);
+        return renderAssistantText(message);
     }
   }, [
     message,
@@ -98,60 +84,24 @@ export function AssistantMessage({
     onApprovalAction,
     canRespondToApproval,
     blocksExpanded,
-    onForkSession,
   ]);
 
   return content;
 }
 
-const renderAssistantText = (message: LiveMessage, onForkSession?: () => void) => {
-  const canFork = !message.isStreaming && onForkSession;
-
+const renderAssistantText = (message: LiveMessage) => {
   return (
-    <MessageContent className={cn(assistantContentClass, canFork && "overflow-visible")}>
+    <MessageContent className={assistantContentClass}>
       <div className="flex items-start gap-2">
-        <div className="relative mt-2 shrink-0 size-2">
-          {/* Gray/green dot indicator */}
+        <div className="relative mt-1.5 shrink-0 size-2">
           <span
             className={cn(
-              "absolute inset-0 rounded-full bg-muted-foreground/60 transition-opacity",
-              message.isStreaming &&
-                "bg-green-500 animate-[glow-pulse_1.5s_ease-in-out_infinite]",
-              canFork && "group-hover:opacity-0",
+              "absolute inset-0 rounded-full transition-all",
+              message.isStreaming
+                ? "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.4)] animate-[glow-pulse_1.5s_ease-in-out_infinite]"
+                : "bg-muted-foreground/40",
             )}
           />
-          {/* Fork button overlays the dot on hover, opens confirmation dialog */}
-          {canFork && (
-            <AlertDialog>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <AlertDialogTrigger asChild>
-                    <button
-                      type="button"
-                      className="cursor-pointer absolute -inset-1.5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                    >
-                      <GitBranchIcon className="size-3.5" />
-                    </button>
-                  </AlertDialogTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="left">
-                  <p>Fork session from this point</p>
-                </TooltipContent>
-              </Tooltip>
-              <AlertDialogContent size="sm">
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Fork Session</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    A new session will be created with the conversation history up to and including this response. The current session will not be affected.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={onForkSession}>Fork</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
         </div>
         <div className="flex-1 min-w-0">
           <MessageResponse
@@ -161,11 +111,6 @@ const renderAssistantText = (message: LiveMessage, onForkSession?: () => void) =
           >
             {message.content || "Thinking through the response..."}
           </MessageResponse>
-          {message.isStreaming ? (
-            <div className={`mt-2 ${assistantMetaTextClass}`}>
-              Streaming response…
-            </div>
-          ) : null}
         </div>
       </div>
     </MessageContent>
@@ -235,6 +180,11 @@ const renderToolMessage = ({
     return renderAssistantText(message);
   }
 
+  // Think tool: render as lightweight reasoning-style block
+  if (toolCall.title === "Think") {
+    return renderThinkToolMessage(message, blocksExpanded);
+  }
+
   const shouldShowOutput = Boolean(
     toolCall.output ?? toolCall.errorText ?? toolCall.display,
   );
@@ -270,6 +220,13 @@ const renderToolMessage = ({
           {toolCall.input ? <ToolInput input={toolCall.input} /> : null}
           <ToolDisplay display={toolCall.display} isError={toolCall.isError} />
           {toolCall.mediaParts ? <ToolMediaPreview mediaParts={toolCall.mediaParts} /> : null}
+          {toolCall.subagentSteps && toolCall.subagentSteps.length > 0 ? (
+            <SubagentActivity
+              steps={toolCall.subagentSteps}
+              isRunning={toolCall.subagentRunning}
+              defaultOpen={blocksExpanded}
+            />
+          ) : null}
           {shouldShowOutput ? (
             <ToolOutput
               errorText={toolCall.errorText}
@@ -350,12 +307,72 @@ const renderToolMessage = ({
       </Tool>
       {isApprovalRequested ? (
         <div className={assistantMetaTextClass}>Waiting for your approval…</div>
-      ) : message.isStreaming && toolCall.state !== "output-available" ? (
-        <div className={assistantMetaTextClass}>Tool call running…</div>
       ) : isApprovalDenied ? (
         <div className={assistantMetaTextClass}>Tool execution cancelled.</div>
       ) : null}
     </>
+  );
+};
+
+const ThinkToolBlock = ({
+  message,
+  defaultOpen,
+}: { message: LiveMessage; defaultOpen: boolean }) => {
+  const toolCall = message.toolCall;
+  const thought =
+    toolCall?.input && typeof toolCall.input === "object"
+      ? (toolCall.input as Record<string, unknown>).thought
+      : undefined;
+  const thoughtText = typeof thought === "string" ? thought : "";
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const isComplete =
+    toolCall?.state === "output-available" ||
+    toolCall?.state === "output-error" ||
+    toolCall?.state === "output-denied";
+
+  return (
+    <MessageContent className={assistantContentClass}>
+      <div className="not-prose">
+        <button
+          type="button"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer"
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <BrainIcon className="size-3.5 text-muted-foreground/70 shrink-0" />
+          <span className="italic">
+            {isComplete
+              ? "Thought through the problem"
+              : "Thinking through the problem…"}
+          </span>
+          <ChevronRightIcon
+            className={cn(
+              "size-3 text-muted-foreground/50 transition-transform duration-200",
+              isOpen && "rotate-90",
+            )}
+          />
+        </button>
+        {isOpen && thoughtText && (
+          <div className="mt-1.5 pl-4 border-l-2 border-border text-sm text-muted-foreground italic whitespace-pre-wrap">
+            {thoughtText.length > 500
+              ? `${thoughtText.slice(0, 500)}…`
+              : thoughtText}
+          </div>
+        )}
+      </div>
+    </MessageContent>
+  );
+};
+
+const renderThinkToolMessage = (
+  message: LiveMessage,
+  blocksExpanded: boolean,
+) => {
+  return (
+    <ThinkToolBlock
+      key={`${message.id}-think-${blocksExpanded}`}
+      message={message}
+      defaultOpen={blocksExpanded}
+    />
   );
 };
 

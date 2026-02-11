@@ -1,9 +1,12 @@
 import type { LiveMessage } from "@/hooks/types";
 import {
   Message,
+  MessageActions,
   MessageAttachment,
   MessageAttachments,
   MessageContent,
+  MessageCopyButton,
+  MessageForkButton,
   UserMessageContent,
 } from "@ai-elements";
 import {
@@ -116,8 +119,8 @@ function getMessageSpacingClass(
       classes.push("mt-4");
     } else if (isAssistant) {
       if (isToolMessage) {
-        // Tool calls have minimal spacing
-        classes.push(previousIsUser ? "mt-2" : "mt-1");
+        // Tool calls: slightly more breathing room between consecutive calls
+        classes.push(previousIsUser ? "mt-2" : "mt-1.5");
       } else if (isThinkingMessage) {
         // Thinking blocks have minimal spacing
         classes.push(previousIsUser ? "mt-2" : "mt-1");
@@ -290,16 +293,27 @@ function VirtualizedMessageListComponent(
                 <UserMessageContent>{message.content}</UserMessageContent>
               ) : null
             ) : (
-              <AssistantMessage
-                message={message}
-                pendingApprovalMap={pendingApprovalMap}
-                onApprovalAction={onApprovalAction}
-                canRespondToApproval={canRespondToApproval}
-                blocksExpanded={blocksExpanded}
-                onForkSession={onForkSession && message.turnIndex !== undefined
-                  ? () => onForkSession(message.turnIndex!)
-                  : undefined}
-              />
+              <>
+                <AssistantMessage
+                  message={message}
+                  pendingApprovalMap={pendingApprovalMap}
+                  onApprovalAction={onApprovalAction}
+                  canRespondToApproval={canRespondToApproval}
+                  blocksExpanded={blocksExpanded}
+                />
+                {!message.isStreaming &&
+                  (!message.variant || message.variant === "text") &&
+                  (message.content || (onForkSession && message.turnIndex !== undefined)) && (
+                  <MessageActions className="
+                  hover-reveal
+                   opacity-0 group-hover:opacity-100 transition-opacity mt-1">
+                    {message.content && <MessageCopyButton content={message.content} />}
+                    {onForkSession && message.turnIndex !== undefined && (
+                      <MessageForkButton onFork={() => onForkSession(message.turnIndex!)} />
+                    )}
+                  </MessageActions>
+                )}
+              </>
             )}
             {message.attachments && message.attachments.length > 0 ? (
               <MessageAttachments>

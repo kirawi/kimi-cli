@@ -11,6 +11,44 @@ Only write entries that are worth mentioning to users.
 
 ## Unreleased
 
+## 1.12.0 (2026-02-11)
+
+- Web: Add subagent activity rendering to display subagent steps (thinking, tool calls, text) inside Task tool messages
+- Web: Add Think tool rendering as a lightweight reasoning-style block
+- Web: Replace emoji status indicators with Lucide icons for tool states and add category-specific icons for tool names
+- Web: Enhance Reasoning component with improved thinking labels and status icons
+- Web: Enhance Todo component with status icons and improved styling
+- Web: Implement WebSocket reconnection with automatic request resending and stale connection watchdog
+- Web: Enhance session creation dialog with command value handling
+- Web: Support tilde (`~`) expansion in session work directory paths
+- Web: Fix assistant message content overflow clipping
+- Wire: Fix deadlock when multiple subagents run concurrently by not blocking the UI loop on approval and tool-call requests
+- Wire: Clean up stale pending requests after agent turn ends
+- Web: Show placeholder text in prompt input with hints for slash commands and file mentions
+- Web: Fix Ctrl+C not working in uvicorn web server by restoring default SIGINT handler and terminal state after shell mode exits
+- Web: Improve session stop handling with proper async cleanup and timeout
+
+## 1.11.0 (2026-02-10)
+
+- Web: Move context usage indicator from workspace header to prompt toolbar with a hover card showing detailed token usage breakdown
+- Web: Add folder indicator with work directory path to the bottom of the file changes panel
+- Web: Fix stderr not being restored when switching to web mode, which could suppress web server error output
+- Web: Fix port availability check by setting SO_REUSEADDR on the test socket
+
+## 1.10.0 (2026-02-09)
+
+- Web: Add copy and fork action buttons to assistant messages for quick content copying and session forking
+- Web: Add keyboard shortcuts for approval actions — press `1` to approve, `2` to approve for session, `3` to decline
+- Web: Add message queueing — queue follow-up messages while the AI is processing; queued messages are sent automatically when the response completes
+- Web: Replace Git diff status bar with unified prompt toolbar showing activity status, message queue, and file changes in collapsible tabs
+- Web: Load global MCP configuration in web worker so web sessions can use MCP tools
+- Web: Improve mobile prompt input UX — reduce textarea min-height, add `autoComplete="off"`, and disable focus ring on small screens
+- Web: Handle models that stream text before thinking by ensuring thinking messages always appear before text in the message list
+- Web: Show more specific status messages during session connection ("Loading history...", "Starting environment..." instead of generic "Connecting...")
+- Web: Send error status when session environment initialization fails instead of leaving UI in a waiting state
+- Web: Auto-reconnect when no session status received within 15 seconds after history replay completes
+- Web: Use non-blocking file I/O in session streaming to avoid blocking the event loop during history replay
+
 ## 1.9.0 (2026-02-06)
 
 - Config: Add `default_yolo` config option to enable YOLO (auto-approve) mode by default
