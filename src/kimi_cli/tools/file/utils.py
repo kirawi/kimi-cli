@@ -171,7 +171,7 @@ _NON_TEXT_SUFFIXES = {
 
 @dataclass(frozen=True)
 class FileType:
-    kind: Literal["text", "image", "video", "unknown"]
+    kind: Literal["text", "image", "video", "pdf", "unknown"]
     mime_type: str
 
 

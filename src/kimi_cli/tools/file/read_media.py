@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import tempfile
 from io import BytesIO
 from pathlib import Path
 from typing import override
@@ -17,6 +19,39 @@ from kimi_cli.utils.path import is_within_directory
 from kimi_cli.wire.types import ImageURLPart, VideoURLPart
 
 MAX_MEDIA_MEGABYTES = 100
+
+
+async def _pdf_to_images(pdf_path: Path | str, resolution: int = 150) -> list[bytes]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_dir_path = Path(tmpdir)
+        output_pattern = tmp_dir_path / "page%d.png"
+
+        cmd = [
+            "mutool",
+            "draw",
+            "-r",
+            str(resolution),
+            "-o",
+            str(output_pattern),
+            str(pdf_path),
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            raise RuntimeError(f"mutool failed with exit code {process.returncode}: {stderr.decode()}")
+
+        image_paths = sorted(tmp_dir_path.glob("page*.png"), key=lambda p: int(p.stem[4:]))
+        images = []
+        for img_path in image_paths:
+            images.append(await KaosPath(img_path).read_bytes())
+
+        return images
 
 
 def _to_data_url(mime_type: str, data: bytes) -> str:
@@ -85,7 +120,7 @@ class ReadMediaFile(CallableTool2[Params]):
         return None
 
     async def _read_media(self, path: KaosPath, file_type: FileType) -> ToolReturnValue:
-        assert file_type.kind in ("image", "video")
+        assert file_type.kind in ("image", "video", "pdf")
 
         media_path = str(path)
         stat = await path.stat()
@@ -124,6 +159,25 @@ class ReadMediaFile(CallableTool2[Params]):
                     part = VideoURLPart(video_url=VideoURLPart.VideoURL(url=data_url))
                     wrapped = wrap_media_part(part, tag="video", attrs={"path": media_path})
                 image_size = None
+            case "pdf":
+                try:
+                    images = await _pdf_to_images(path)
+                except Exception as e:
+                    return ToolError(
+                        message=f"Failed to convert PDF to images: {e}",
+                        brief="PDF conversion failed",
+                    )
+                wrapped = []
+                for i, img_data in enumerate(images):
+                    data_url = _to_data_url("image/png", img_data)
+                    part = ImageURLPart(image_url=ImageURLPart.ImageURL(url=data_url))
+                    wrapped.extend(
+                        wrap_media_part(
+                            part, tag="image", attrs={"path": media_path, "page": str(i + 1)}
+                        )
+                    )
+                # Just use the size of the first page as a hint
+                image_size = _extract_image_size(images[0]) if images else None
 
         size_hint = ""
         if image_size:
@@ -169,6 +223,11 @@ class ReadMediaFile(CallableTool2[Params]):
 
             header = await p.read_bytes(MEDIA_SNIFF_BYTES)
             file_type = detect_file_type(str(p), header=header)
+
+            # Special handling for PDF
+            if file_type.kind == "unknown" and str(p).lower().endswith(".pdf"):
+                file_type = FileType(kind="pdf", mime_type="application/pdf")
+
             if file_type.kind == "text":
                 return ToolError(
                     message=f"`{params.path}` is a text file. Use ReadFile to read text files.",
@@ -199,6 +258,14 @@ class ReadMediaFile(CallableTool2[Params]):
                     message=(
                         "The current model does not support video input. "
                         "Tell the user to use a model with video input capability."
+                    ),
+                    brief="Unsupported media type",
+                )
+            if file_type.kind == "pdf" and "image_in" not in self._capabilities:
+                return ToolError(
+                    message=(
+                        "The current model does not support image input (required for PDF reading). "
+                        "Tell the user to use a model with image input capability."
                     ),
                     brief="Unsupported media type",
                 )
