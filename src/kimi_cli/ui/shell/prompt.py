@@ -708,17 +708,17 @@ class CustomPromptSession:
             event.current_buffer.insert_text("\n")
 
         if is_clipboard_available():
+            system_clipboard = PyperclipClipboard()
 
             @_kb.add("c-v", eager=True)
             def _(event: KeyPressEvent) -> None:
                 if self._try_paste_image(event):
                     return
-                clipboard_data = event.app.clipboard.get_data()
+                # Explicitly read from system clipboard for paste
+                clipboard_data = system_clipboard.get_data()
                 event.current_buffer.paste_clipboard_data(clipboard_data)
-
-            clipboard = PyperclipClipboard()
         else:
-            clipboard = None
+            pass
 
         self._session = PromptSession[str](
             message=self._render_message,
@@ -726,7 +726,6 @@ class CustomPromptSession:
             completer=self._agent_mode_completer,
             complete_while_typing=True,
             key_bindings=_kb,
-            clipboard=clipboard,
             history=history,
             bottom_toolbar=self._render_bottom_toolbar,
             style=Style.from_dict({"bottom-toolbar": "noreverse"}),

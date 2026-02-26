@@ -21,7 +21,7 @@ from kimi_cli.wire.types import ImageURLPart, VideoURLPart
 MAX_MEDIA_MEGABYTES = 100
 
 
-async def _pdf_to_images(pdf_path: Path | str, resolution: int = 150) -> list[bytes]:
+async def _pdf_to_images(pdf_path: Path | str, resolution: int = 300) -> list[bytes]:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_dir_path = Path(tmpdir)
         output_pattern = tmp_dir_path / "page%d.png"
