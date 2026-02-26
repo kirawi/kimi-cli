@@ -11,6 +11,8 @@ Kimi Code CLI shell mode supports the following keyboard shortcuts.
 | `Alt-Enter` | Insert newline (same as `Ctrl-J`) |
 | `Ctrl-V` | Paste (supports images) |
 | `Ctrl-E` | Expand full approval request content |
+| `1`–`3` | Quick select approval option |
+| `1`–`5` | Select question option by number |
 | `Ctrl-D` | Exit Kimi Code CLI |
 | `Ctrl-C` | Interrupt current operation |
 
@@ -60,6 +62,25 @@ Image pasting requires the model to support `image_in` capability.
 When approval request preview content is truncated, press `Ctrl-E` to view the full content in a fullscreen pager. When preview is truncated, a "... (truncated, ctrl-e to expand)" hint is displayed.
 
 Useful for viewing longer shell commands or file diff content.
+
+### Number key quick selection
+
+In the approval panel, press `1`–`3` to directly select and submit the corresponding approval option without navigating with arrow keys first.
+
+## Structured question operations
+
+When the AI uses the `AskUserQuestion` tool to ask you a question, the question panel supports the following keyboard operations:
+
+| Shortcut | Function |
+|----------|----------|
+| `↑` / `↓` | Navigate options |
+| `←` / `→` / `Tab` | Switch between questions (multi-question mode) |
+| `1`–`5` | Select option by number (auto-submits for single-select, toggles for multi-select) |
+| `Space` | Submit selection in single-select mode, toggle selection in multi-select mode |
+| `Enter` | Confirm selection |
+| `Esc` | Skip question |
+
+When the AI asks multiple questions at once, the question panel displays them as tabs. Use `←` / `→` or `Tab` to switch between questions. Answered questions are marked as complete, and switching back to a previously answered question restores your earlier selection.
 
 ## Exit and interrupt
 
