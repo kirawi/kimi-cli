@@ -7,10 +7,11 @@ Kimi Code CLI shell mode supports the following keyboard shortcuts.
 | Shortcut | Function |
 |----------|----------|
 | `Ctrl-X` | Toggle agent/shell mode |
+| `Shift-Tab` | Toggle plan mode (read-only research and planning) |
 | `Ctrl-O` | Edit in external editor (`$VISUAL`/`$EDITOR`) |
 | `Ctrl-J` | Insert newline |
 | `Alt-Enter` | Insert newline (same as `Ctrl-J`) |
-| `Ctrl-V` | Paste (supports images) |
+| `Ctrl-V` | Paste (supports images and video files) |
 | `Ctrl-E` | Expand full approval request content |
 | `1`–`3` | Quick select approval option |
 | `1`–`5` | Select question option by number |
@@ -28,7 +29,16 @@ Press `Ctrl-X` in the input box to switch between two modes:
 
 The prompt changes based on current mode:
 - Agent mode: `✨` (normal) or `💫` (thinking mode)
+- Plan mode: `📋`
 - Shell mode: `$`
+
+## Plan mode
+
+### `Shift-Tab`: Toggle plan mode
+
+Press `Shift-Tab` to enable or disable plan mode. In plan mode, the AI can only use read-only tools to explore the codebase, writing an implementation plan to a plan file and submitting it for your approval.
+
+When enabled, the prompt changes to `📋` and a blue `plan` badge appears in the status bar. You can also use the `/plan` slash command to manage plan mode. See [Plan mode](../guides/interaction.md#plan-mode) for details.
 
 ## External editor
 
@@ -66,11 +76,12 @@ Paste clipboard content into the input box. Supports:
 
 - **Text**: Pasted directly
 - **Images**: Converted to base64 embedding (requires model image input support)
+- **Video files**: File path is inserted as text into the input box (requires model video input support)
 
 When pasting images, a placeholder `[image:xxx.png,WxH]` is displayed. The actual image data is sent along with the message to the model.
 
 ::: tip
-Image pasting requires the model to support `image_in` capability.
+Image pasting requires the model to support `image_in` capability. Video pasting requires the model to support `video_in` capability.
 :::
 
 ## Approval request operations
@@ -133,7 +144,8 @@ The bottom status bar displays:
 
 - Current time
 - Current mode (agent/shell) and model name (in agent mode)
-- YOLO badge (when enabled)
+- YOLO badge (yellow, when enabled)
+- Plan badge (blue, when enabled)
 - Shortcut hints
 - Context usage
 

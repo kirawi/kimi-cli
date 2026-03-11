@@ -49,7 +49,11 @@ def test_initialize_handshake(tmp_path) -> None:
                             "description": "Analyze the codebase and generate an `AGENTS.md` file",
                             "aliases": [],
                         },
-                        {"name": "compact", "description": "Compact the context", "aliases": []},
+                        {
+                            "name": "compact",
+                            "description": "Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)",
+                            "aliases": [],
+                        },
                         {"name": "clear", "description": "Clear the context", "aliases": ["reset"]},
                         {
                             "name": "yolo",
@@ -57,8 +61,23 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": [],
                         },
                         {
+                            "name": "plan",
+                            "description": "Toggle plan mode. Usage: /plan [on|off|view|clear]",
+                            "aliases": [],
+                        },
+                        {
                             "name": "add-dir",
                             "description": "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "export",
+                            "description": "Export current session context to a markdown file",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "import",
+                            "description": "Import context from a file or session ID",
                             "aliases": [],
                         },
                         {
@@ -117,7 +136,11 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                             "description": "Analyze the codebase and generate an `AGENTS.md` file",
                             "aliases": [],
                         },
-                        {"name": "compact", "description": "Compact the context", "aliases": []},
+                        {
+                            "name": "compact",
+                            "description": "Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)",
+                            "aliases": [],
+                        },
                         {"name": "clear", "description": "Clear the context", "aliases": ["reset"]},
                         {
                             "name": "yolo",
@@ -125,8 +148,23 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                             "aliases": [],
                         },
                         {
+                            "name": "plan",
+                            "description": "Toggle plan mode. Usage: /plan [on|off|view|clear]",
+                            "aliases": [],
+                        },
+                        {
                             "name": "add-dir",
                             "description": "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "export",
+                            "description": "Export current session context to a markdown file",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "import",
+                            "description": "Import context from a file or session ID",
                             "aliases": [],
                         },
                         {
@@ -244,7 +282,13 @@ def test_external_tool_call(tmp_path) -> None:
                 {
                     "method": "event",
                     "type": "StatusUpdate",
-                    "payload": {"context_usage": None, "token_usage": None, "message_id": None},
+                    "payload": {
+                        "context_usage": None,
+                        "context_tokens": None,
+                        "max_context_tokens": None,
+                        "token_usage": None,
+                        "message_id": None,
+                    },
                 },
                 {
                     "method": "request",
@@ -278,7 +322,13 @@ def test_external_tool_call(tmp_path) -> None:
                 {
                     "method": "event",
                     "type": "StatusUpdate",
-                    "payload": {"context_usage": None, "token_usage": None, "message_id": None},
+                    "payload": {
+                        "context_usage": None,
+                        "context_tokens": None,
+                        "max_context_tokens": None,
+                        "token_usage": None,
+                        "message_id": None,
+                    },
                 },
                 {"method": "event", "type": "TurnEnd", "payload": {}},
             ]
@@ -322,7 +372,13 @@ def test_prompt_without_initialize(tmp_path) -> None:
                 {
                     "method": "event",
                     "type": "StatusUpdate",
-                    "payload": {"context_usage": None, "token_usage": None, "message_id": None},
+                    "payload": {
+                        "context_usage": None,
+                        "context_tokens": None,
+                        "max_context_tokens": None,
+                        "token_usage": None,
+                        "message_id": None,
+                    },
                 },
                 {"method": "event", "type": "TurnEnd", "payload": {}},
             ]

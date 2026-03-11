@@ -79,6 +79,11 @@ class Params(BaseModel):
             "outside the working directory."
         )
     )
+    # dpi: str = Field(
+    #     description="PDF-only. Sets the render DPI (min of 72). Defaults to to 175. Lowering DPI is recommended if the DPI is big.",
+    #     default=175,
+    #     ge=72,
+    # )
 
 
 class ReadMediaFile(CallableTool2[Params]):

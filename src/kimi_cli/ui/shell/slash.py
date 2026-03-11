@@ -32,7 +32,7 @@ registry = SlashCommandRegistry[ShellSlashCmdFunc]()
 shell_mode_registry = SlashCommandRegistry[ShellSlashCmdFunc]()
 
 
-def _ensure_kimi_soul(app: Shell) -> KimiSoul | None:
+def ensure_kimi_soul(app: Shell) -> KimiSoul | None:
     if not isinstance(app.soul, KimiSoul):
         console.print("[red]KimiSoul required[/red]")
         return None
@@ -51,6 +51,7 @@ SKILL_COMMAND_PREFIX = "skill:"
 
 _KEYBOARD_SHORTCUTS = [
     ("Ctrl-X", "Toggle agent/shell mode"),
+    ("Shift-Tab", "Toggle plan mode (read-only research)"),
     ("Ctrl-O", "Edit in external editor ($VISUAL/$EDITOR)"),
     ("Ctrl-J / Alt-Enter", "Insert newline"),
     ("Ctrl-V", "Paste (supports images)"),
@@ -142,7 +143,7 @@ async def model(app: Shell, args: str):
     """Switch LLM model or thinking mode"""
     from kimi_cli.llm import derive_model_capabilities
 
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     if soul is None:
         return
     config = soul.runtime.config
@@ -265,7 +266,7 @@ async def editor(app: Shell, args: str):
     """Set default external editor for Ctrl-O"""
     from kimi_cli.utils.editor import get_editor_command
 
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     if soul is None:
         return
     config = soul.runtime.config
@@ -402,7 +403,7 @@ def feedback(app: Shell, args: str):
 @registry.command(aliases=["reset"])
 async def clear(app: Shell, args: str):
     """Clear the context"""
-    if _ensure_kimi_soul(app) is None:
+    if ensure_kimi_soul(app) is None:
         return
     await app.run_soul_command("/clear")
     raise Reload()
@@ -411,7 +412,7 @@ async def clear(app: Shell, args: str):
 @registry.command
 async def new(app: Shell, args: str):
     """Start a new session"""
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     if soul is None:
         return
     current_session = soul.runtime.session
@@ -429,7 +430,7 @@ async def new(app: Shell, args: str):
 @registry.command(name="sessions", aliases=["resume"])
 async def list_sessions(app: Shell, args: str):
     """List sessions and resume optionally"""
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     if soul is None:
         return
 
@@ -473,7 +474,7 @@ async def list_sessions(app: Shell, args: str):
 @registry.command
 def web(app: Shell, args: str):
     """Open Kimi Code Web UI in browser"""
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     session_id = soul.runtime.session.id if soul else None
     raise SwitchToWeb(session_id=session_id)
 
@@ -487,7 +488,7 @@ async def mcp(app: Shell, args: str):
     from kimi_cli.soul.toolset import KimiToolset
     from kimi_cli.utils.rich.columns import BulletColumns
 
-    soul = _ensure_kimi_soul(app)
+    soul = ensure_kimi_soul(app)
     if soul is None:
         return
     toolset = soul.agent.toolset
@@ -539,6 +540,7 @@ async def mcp(app: Shell, args: str):
 
 from . import (  # noqa: E402
     debug,  # noqa: F401 # type: ignore[reportUnusedImport]
+    export_import,  # noqa: F401 # type: ignore[reportUnusedImport]
     oauth,  # noqa: F401 # type: ignore[reportUnusedImport]
     setup,  # noqa: F401 # type: ignore[reportUnusedImport]
     update,  # noqa: F401 # type: ignore[reportUnusedImport]
