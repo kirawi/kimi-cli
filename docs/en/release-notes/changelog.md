@@ -4,6 +4,12 @@ This page documents the changes in each Kimi Code CLI release.
 
 ## Unreleased
 
+- Core: Fix HTTP header values containing trailing whitespace/newlines on certain Linux systems (e.g. kernel 6.8.0-101) causing connection errors — strip whitespace from ASCII header values before sending
+- Core: Fix OpenAI Responses provider sending implicit `reasoning.effort=null` which breaks Responses-compatible endpoints that require reasoning — reasoning parameters are now omitted unless explicitly set
+- Vis: Add session download, import, export and delete — one-click ZIP download from session explorer and detail page, ZIP import into a dedicated `~/.kimi/imported_sessions/` directory with "Imported" filter toggle, `kimi export <session_id>` CLI command, and delete support for imported sessions with AlertDialog confirmation
+- Core: Fix context compaction failing when conversation contains media parts (images, audio, video) — switch from blacklist filtering (exclude `ThinkPart`) to whitelist filtering (only keep `TextPart`) to prevent unsupported content types from being sent to the compaction API
+- Web: Fix `@` file mention index not refreshing after switching sessions or when workspace files change — reset index on session switch, auto-refresh after 30s staleness, and support path-prefix search beyond the 500-file limit
+
 ## 1.19.0 (2026-03-10)
 
 - Core: Add plan mode — the agent can enter a planning phase (`EnterPlanMode`) where only read-only tools (Glob, Grep, ReadFile) are available, write a structured plan to a file, and present it for user approval (`ExitPlanMode`) before executing; toggle manually via `/plan` slash command or `Shift-Tab` keyboard shortcut
