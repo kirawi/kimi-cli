@@ -4,6 +4,31 @@
 
 ## 未发布
 
+## 1.22.0 (2026-03-13)
+
+- Shell：长文本粘贴自动折叠为 `[Pasted text #n]` 占位符——通过 `Ctrl-V` 或括号粘贴输入的超过 300 字符或 3 行的文本在提示缓冲区中显示为紧凑的占位符标记，完整内容在发送给模型时展开；外部编辑器（`Ctrl-O`）打开时自动展开占位符，保存后重新折叠
+- Shell：粘贴的图片缓存为附件占位符——从剪贴板粘贴的图片存储到磁盘，在提示中显示为 `[image:…]` 标记，保持输入缓冲区整洁
+- Shell：修复粘贴文本中 UTF-16 surrogate 字符导致序列化错误的问题——来自 Windows 剪贴板的孤立 surrogate 字符现在在存储前即被清洗，防止历史记录写入和 JSON 序列化时出现 `UnicodeEncodeError`
+- Shell：重新设计斜杠命令补全菜单——使用全宽自定义菜单替代默认的补全弹窗，展示命令名称和多行描述，支持高亮和滚动
+- Shell：修复取消的 Shell 命令未正确终止子进程的问题——当运行中的命令被取消时，子进程现在会被显式杀死，防止产生孤儿进程
+
+## 1.21.0 (2026-03-12)
+
+- Shell：新增内联运行提示与 steer 输入——模型运行时 Agent 输出直接渲染在提示区域内，用户无需等待轮次结束即可输入并发送后续消息（steer）；审批请求和问答面板支持内联键盘交互
+- Core：将 steer 注入方式从合成工具调用改为常规 User 消息——steer 内容现作为标准 User 消息追加到上下文，而非伪造的 `_steer` 工具调用/工具结果对，改善了上下文序列化和可视化的兼容性
+- Wire：新增 `SteerInput` 事件——当用户在运行中的轮次发送后续 steer 消息时触发的新 Wire 协议事件
+- Shell：Agent 模式下提交后回显用户输入——提示符和输入文本会打印回终端，使对话记录更清晰
+- Shell：改进会话回放对 steer 输入的支持——回放现在能正确重建并展示 steer 消息与常规轮次，并过滤内部 system-reminder 消息
+- Shell：修复 toast 通知中升级命令不一致的问题——升级命令文本统一从 `UPGRADE_COMMAND` 常量获取
+- Core：在 `context.jsonl` 中持久化系统提示词——系统提示词作为上下文文件的第一条记录写入，并在会话生命周期内冻结，使可视化工具能读取完整对话上下文，会话恢复时复用原始提示词而非重新生成
+- Vis：为 `kimi vis` 新增会话目录快捷操作——可在会话页面直接打开当前会话文件夹，使用 `Copy DIR` 复制原始会话目录路径，并支持在 macOS 和 Windows 上打开目录
+- Shell：优化 API 密钥登录体验——验证密钥时显示加载动画，当 401 错误可能因选错平台导致时显示提示信息，登录成功后展示配置摘要，并将 Thinking 模式默认设为开启
+
+## 1.20.0 (2026-03-11)
+
+- Web：新增 Web UI 中的 Plan 模式切换——在输入工具栏中添加开关控件，Plan 模式激活时输入框显示蓝色虚线边框，并支持通过 `set_plan_mode` Wire 协议方法设置 Plan 模式
+- Core：Plan 模式状态跨会话持久化——将 `plan_mode` 保存到 `SessionState`，会话恢复时自动还原
+- Core：修复工具触发的 Plan 模式变更未正确反映在 StatusUpdate 中的问题——在 `EnterPlanMode`/`ExitPlanMode` 工具执行后发送更新的 `StatusUpdate`，确保客户端看到最新状态
 - Core：修复部分 Linux 系统（如内核版本 6.8.0-101）上 HTTP 请求头包含尾部空白/换行符导致连接错误的问题——发送前对 ASCII 请求头值执行空白裁剪
 - Core：修复 OpenAI Responses provider 隐式发送 `reasoning.effort=null` 导致需要推理的 Responses 兼容端点报错的问题——现在仅在显式设置时才发送推理参数
 - Vis：新增会话下载、导入、导出与删除功能——在会话浏览器和详情页支持一键 ZIP 下载，支持将 ZIP 文件导入到独立的 `~/.kimi/imported_sessions/` 目录并通过"Imported"筛选器切换查看，新增 `kimi export <session_id>` CLI 命令，支持删除导入的会话并提供 AlertDialog 二次确认

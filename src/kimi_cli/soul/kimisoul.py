@@ -6,7 +6,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import kosong
 import tenacity
@@ -18,7 +18,7 @@ from kosong.chat_provider import (
     APITimeoutError,
     RetryableChatProvider,
 )
-from kosong.message import Message, ToolCall
+from kosong.message import Message
 from tenacity import RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential_jitter
 
 from kimi_cli.llm import ModelCapability
@@ -41,7 +41,7 @@ from kimi_cli.soul.dynamic_injection import (
     normalize_history,
 )
 from kimi_cli.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
-from kimi_cli.soul.message import check_message, system, tool_result_to_message
+from kimi_cli.soul.message import check_message, system, system_reminder, tool_result_to_message
 from kimi_cli.soul.slash import registry as soul_slash_registry
 from kimi_cli.soul.toolset import KimiToolset
 from kimi_cli.tools.dmail import NAME as SendDMail_NAME
@@ -58,6 +58,7 @@ from kimi_cli.wire.types import (
     MCPLoadingBegin,
     MCPLoadingEnd,
     StatusUpdate,
+    SteerInput,
     StepBegin,
     StepInterrupted,
     TextPart,
@@ -128,9 +129,11 @@ class KimiSoul:
             self._checkpoint_with_user_message = False
 
         self._steer_queue: asyncio.Queue[str | list[ContentPart]] = asyncio.Queue()
-        self._plan_mode: bool = False
+        self._plan_mode: bool = self._runtime.session.state.plan_mode
         self._plan_session_id: str | None = None
         self._pending_plan_activation_injection: bool = False
+        if self._plan_mode:
+            self._ensure_plan_session_id()
         self._injection_providers: list[DynamicInjectionProvider] = [
             PlanModeInjectionProvider(),
         ]
@@ -231,12 +234,17 @@ class KimiSoul:
 
     def _set_plan_mode(self, enabled: bool, *, source: Literal["manual", "tool"]) -> bool:
         """Update plan mode state for either manual or tool-driven toggles."""
+        if enabled == self._plan_mode:
+            return self._plan_mode
         self._plan_mode = enabled
         if enabled:
             self._ensure_plan_session_id()
             self._pending_plan_activation_injection = source == "manual"
         else:
             self._pending_plan_activation_injection = False
+        # Persist plan mode to session state so it survives process restarts
+        self._runtime.session.state.plan_mode = self._plan_mode
+        self._runtime.session.save_state()
         return self._plan_mode
 
     def get_plan_file_path(self) -> Path | None:
@@ -271,13 +279,16 @@ class KimiSoul:
         return self._set_plan_mode(not self._plan_mode, source="tool")
 
     async def toggle_plan_mode_from_manual(self) -> bool:
-        """Toggle plan mode from UI/manual entry points.
-
-        Manual toggles do not append a synthetic history message. Instead, entering
-        plan mode schedules a one-shot injection for the next LLM step, and exiting
-        plan mode clears that pending injection if it has not been used yet.
-        """
+        """Toggle plan mode from UI/manual entry points (slash command, keybinding)."""
         return self._set_plan_mode(not self._plan_mode, source="manual")
+
+    async def set_plan_mode_from_manual(self, enabled: bool) -> bool:
+        """Set plan mode to a specific state from UI/manual entry points.
+
+        Unlike toggle, this accepts the desired state directly, avoiding
+        race conditions when the caller already knows the target value.
+        """
+        return self._set_plan_mode(enabled, source="manual")
 
     def consume_pending_plan_activation_injection(self) -> bool:
         """Consume the next-step activation reminder scheduled by a manual toggle."""
@@ -337,7 +348,7 @@ class KimiSoul:
         self._steer_queue.put_nowait(content)
 
     async def _consume_pending_steers(self) -> bool:
-        """Drain the steer queue and inject as synthetic tool results.
+        """Drain the steer queue and inject as follow-up user messages.
 
         Returns True if any steers were consumed.
         """
@@ -345,38 +356,22 @@ class KimiSoul:
         while not self._steer_queue.empty():
             content = self._steer_queue.get_nowait()
             await self._inject_steer(content)
+            wire_send(SteerInput(user_input=content))
             consumed = True
         return consumed
 
     async def _inject_steer(self, content: str | list[ContentPart]) -> None:
-        """Inject a single steer as a synthetic ``_steer`` tool_call + tool result pair."""
-        from uuid import uuid4
-
-        steer_id = f"steer_{uuid4().hex[:8]}"
-        text = (
-            content
-            if isinstance(content, str)
-            else Message(role="user", content=content).extract_text(" ")
+        """Inject a single steer as a regular follow-up user message."""
+        parts = cast(
+            list[ContentPart],
+            [TextPart(text=content)] if isinstance(content, str) else list(content),
         )
-        await self._context.append_message(
-            [
-                Message(
-                    role="assistant",
-                    content=[],
-                    tool_calls=[
-                        ToolCall(
-                            id=steer_id,
-                            function=ToolCall.FunctionBody(name="_steer", arguments=None),
-                        )
-                    ],
-                ),
-                Message(
-                    role="tool",
-                    content=[system(f"The user has sent a real-time instruction:\n\n{text}")],
-                    tool_call_id=steer_id,
-                ),
-            ]
-        )
+        message = Message(role="user", content=parts)
+        if self._runtime.llm is None:
+            raise LLMNotSet()
+        if missing_caps := check_message(message, self._runtime.llm.capabilities):
+            raise LLMNotSupported(self._runtime.llm, list(missing_caps))
+        await self._context.append_message(message)
 
     @property
     def available_slash_commands(self) -> list[SlashCommand[Any]]:
@@ -583,7 +578,7 @@ class KimiSoul:
 
             if step_outcome is not None:
                 has_steers = await self._consume_pending_steers()
-                if step_outcome.stop_reason == "no_tool_calls" and has_steers:
+                if has_steers:
                     continue  # steers injected, force another LLM step
                 final_message = (
                     step_outcome.assistant_message
@@ -613,11 +608,12 @@ class KimiSoul:
         # Dynamic injection
         injections = await self._collect_injections()
         if injections:
-            combined = "\n".join(
-                f"<system-reminder>\n{inj.content}\n</system-reminder>" for inj in injections
-            )
+            combined_reminders = "\n".join(system_reminder(inj.content).text for inj in injections)
             await self._context.append_message(
-                Message(role="user", content=[TextPart(text=combined)])
+                Message(
+                    role="user",
+                    content=[TextPart(text=combined_reminders)],
+                )
             )
 
         # Normalize: merge adjacent user messages for clean API input
@@ -650,7 +646,9 @@ class KimiSoul:
 
         result = await _kosong_step_with_retry()
         logger.debug("Got step result: {result}", result=result)
-        status_update = StatusUpdate(token_usage=result.usage, message_id=result.id)
+        status_update = StatusUpdate(
+            token_usage=result.usage, message_id=result.id, plan_mode=self._plan_mode
+        )
         if result.usage is not None:
             # mark the token count for the context before the step
             await self._context.update_token_count(result.usage.input)
@@ -661,8 +659,14 @@ class KimiSoul:
         wire_send(status_update)
 
         # wait for all tool results (may be interrupted)
+        plan_mode_before_tools = self._plan_mode
         results = await result.tool_results()
         logger.debug("Got tool results: {results}", results=results)
+
+        # If a tool (EnterPlanMode/ExitPlanMode) changed plan mode during execution,
+        # send a corrected StatusUpdate so the client sees the up-to-date state.
+        if self._plan_mode != plan_mode_before_tools:
+            wire_send(StatusUpdate(plan_mode=self._plan_mode))
 
         # shield the context manipulation from interruption
         await asyncio.shield(self._grow_context(result, results))
@@ -760,6 +764,7 @@ class KimiSoul:
         wire_send(CompactionBegin())
         compaction_result = await _compact_with_retry()
         await self._context.clear()
+        await self._context.write_system_prompt(self._agent.system_prompt)
         await self._checkpoint()
         await self._context.append_message(compaction_result.messages)
 

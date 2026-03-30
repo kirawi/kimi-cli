@@ -23,6 +23,11 @@ Note: `KIMI_SHARE_DIR` only affects the storage location of the runtime data lis
 │           ├── context.jsonl
 │           ├── wire.jsonl
 │           └── state.json
+├── imported_sessions/    # Imported session data (via kimi vis)
+│   └── <session-id>/
+│       ├── context.jsonl
+│       ├── wire.jsonl
+│       └── state.json
 ├── user-history/         # Input history
 │   └── <work-dir-hash>.jsonl
 └── logs/                 # Logs
@@ -78,7 +83,9 @@ Session data is grouped by working directory and stored under `~/.kimi/sessions/
 
 ### `context.jsonl`
 
-Context history file, stores the session's message history in JSON Lines (JSONL) format. Each line is a message (user input, model response, tool calls, etc.).
+Context history file, stores the session's full context in JSON Lines (JSONL) format. The first line is a system prompt record (`_system_prompt`), followed by messages (user input, model response, tool calls, etc.) and internal records (checkpoints, token usage, etc.).
+
+The system prompt is generated and frozen at session creation time, and reused on session restore instead of being regenerated.
 
 Kimi Code CLI uses this file to restore session context when using `--continue` or `--session`.
 
@@ -91,6 +98,7 @@ Wire message log file, stores Wire events during the session in JSON Lines (JSON
 Session state file, stores the session's runtime state, including:
 
 - `approval`: Approval decision state (YOLO mode on/off, auto-approved operation types)
+- `plan_mode`: Plan mode on/off status
 - `dynamic_subagents`: Dynamically created subagent definitions
 - `additional_dirs`: Additional workspace directories added via `--add-dir` or `/add-dir`
 

@@ -21,6 +21,7 @@ from kimi_cli.wire.types import (
     QuestionRequest,
     QuestionResponse,
     StatusUpdate,
+    SteerInput,
     StepBegin,
     StepInterrupted,
     SubagentEvent,
@@ -73,6 +74,34 @@ async def test_wire_message_serde():
     assert serialize_wire_message(msg) == snapshot({"type": "TurnEnd", "payload": {}})
     _test_serde(msg)
 
+    msg = SteerInput(user_input="Follow up")
+    assert serialize_wire_message(msg) == snapshot(
+        {"type": "SteerInput", "payload": {"user_input": "Follow up"}}
+    )
+    _test_serde(msg)
+
+    msg = SteerInput(
+        user_input=[
+            TextPart(text="Look"),
+            ImageURLPart(image_url=ImageURLPart.ImageURL(url="https://example.com/image")),
+        ]
+    )
+    assert serialize_wire_message(msg) == snapshot(
+        {
+            "type": "SteerInput",
+            "payload": {
+                "user_input": [
+                    {"type": "text", "text": "Look"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image", "id": None},
+                    },
+                ]
+            },
+        }
+    )
+    _test_serde(msg)
+
     msg = StepBegin(n=1)
     assert serialize_wire_message(msg) == snapshot({"type": "StepBegin", "payload": {"n": 1}})
     _test_serde(msg)
@@ -107,6 +136,7 @@ async def test_wire_message_serde():
                 "max_context_tokens": None,
                 "token_usage": None,
                 "message_id": None,
+                "plan_mode": None,
             },
         }
     )

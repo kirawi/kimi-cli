@@ -77,6 +77,7 @@ async def clear(soul: KimiSoul, args: str):
     """Clear the context"""
     logger.info("Running `/clear`")
     await soul.context.clear()
+    await soul.context.write_system_prompt(soul.agent.system_prompt)
     wire_send(TextPart(text="The context has been cleared."))
     snap = soul.status
     wire_send(
@@ -109,10 +110,12 @@ async def plan(soul: KimiSoul, args: str):
             await soul.toggle_plan_mode_from_manual()
         plan_path = soul.get_plan_file_path()
         wire_send(TextPart(text=f"Plan mode ON. Plan file: {plan_path}"))
+        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
     elif subcmd == "off":
         if soul.plan_mode:
             await soul.toggle_plan_mode_from_manual()
         wire_send(TextPart(text="Plan mode OFF. All tools are now available."))
+        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
     elif subcmd == "view":
         content = soul.read_current_plan()
         if content:
@@ -135,6 +138,7 @@ async def plan(soul: KimiSoul, args: str):
             )
         else:
             wire_send(TextPart(text="Plan mode OFF. All tools are now available."))
+        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
 
 
 @registry.command(name="add-dir")

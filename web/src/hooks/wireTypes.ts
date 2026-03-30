@@ -130,6 +130,7 @@ export type StatusUpdateEvent = {
     context_usage: number | null;
     token_usage?: TokenUsage | null;
     message_id?: string;
+    plan_mode?: boolean | null;
   };
 };
 
@@ -197,6 +198,9 @@ export type QuestionItem = {
   header: string;
   options: QuestionOption[];
   multi_select: boolean;
+  body?: string;
+  other_label?: string;
+  other_description?: string;
 };
 
 export type QuestionRequestEvent = {
@@ -221,6 +225,13 @@ export type SubagentEventWire = {
   };
 };
 
+export type SteerInputEvent = {
+  type: "SteerInput";
+  payload: {
+    user_input: string | ContentPart[];
+  };
+};
+
 // Union of all event types
 export type WireEvent =
   | TurnBeginEvent
@@ -239,7 +250,8 @@ export type WireEvent =
   | ApprovalRequestEvent
   | ApprovalRequestResolvedEvent
   | QuestionRequestEvent
-  | SubagentEventWire;
+  | SubagentEventWire
+  | SteerInputEvent;
 
 // Parsed wire message
 export type WireMessage = {
