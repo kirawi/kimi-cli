@@ -3,7 +3,9 @@ import {
   type WireEvent,
   type ContextMessage,
   getWireEvents,
+  getSubagentWireEvents,
   getContextMessages,
+  getSubagentContextMessages,
   normalizeContent,
 } from "@/lib/api";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -12,6 +14,7 @@ import { formatTimestamp } from "@/features/wire-viewer/wire-event-card";
 interface DualViewProps {
   sessionId: string;
   refreshKey?: number;
+  agentScope?: string | null;
 }
 
 // ── Type badge colors (simplified from wire-event-card) ──
@@ -19,16 +22,23 @@ interface DualViewProps {
 const TYPE_COLORS: Record<string, string> = {
   TurnBegin: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
   TurnEnd: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
+  SteerInput: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
   StepBegin: "bg-green-500/15 text-green-700 dark:text-green-300",
   StepInterrupted: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
   CompactionBegin: "bg-orange-500/15 text-orange-700 dark:text-orange-300",
   CompactionEnd: "bg-orange-500/15 text-orange-700 dark:text-orange-300",
+  MCPLoadingBegin: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300",
+  MCPLoadingEnd: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300",
   StatusUpdate: "bg-gray-500/15 text-gray-700 dark:text-gray-300",
+  Notification: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
   TextPart: "bg-gray-500/15 text-gray-700 dark:text-gray-300",
   ThinkPart: "bg-gray-500/15 text-gray-700 dark:text-gray-300",
+  PlanDisplay: "bg-teal-500/15 text-teal-700 dark:text-teal-300",
   ToolCall: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
   ToolResult: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
   ToolCallPart: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
+  ToolCallRequest: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
+  QuestionRequest: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   ApprovalRequest: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   ApprovalResponse: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   SubagentEvent: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
@@ -140,7 +150,7 @@ function getContextToolCallIds(msg: ContextMessage): string[] {
   return ids;
 }
 
-export function DualView({ sessionId, refreshKey = 0 }: DualViewProps) {
+export function DualView({ sessionId, refreshKey = 0, agentScope }: DualViewProps) {
   const [wireEvents, setWireEvents] = useState<WireEvent[]>([]);
   const [contextMessages, setContextMessages] = useState<ContextMessage[]>([]);
   const [wireLoading, setWireLoading] = useState(true);
@@ -158,18 +168,24 @@ export function DualView({ sessionId, refreshKey = 0 }: DualViewProps) {
     const forceRefresh = refreshKey > 0;
     setWireLoading(true);
     setWireError(null);
-    getWireEvents(sessionId, forceRefresh)
+    const wireFetch = agentScope
+      ? getSubagentWireEvents(sessionId, agentScope, forceRefresh)
+      : getWireEvents(sessionId, forceRefresh);
+    wireFetch
       .then((res) => setWireEvents(res.events))
       .catch((err) => setWireError(err.message))
       .finally(() => setWireLoading(false));
 
     setContextLoading(true);
     setContextError(null);
-    getContextMessages(sessionId, forceRefresh)
+    const ctxFetch = agentScope
+      ? getSubagentContextMessages(sessionId, agentScope, forceRefresh)
+      : getContextMessages(sessionId, forceRefresh);
+    ctxFetch
       .then((res) => setContextMessages(res.messages.filter((m) => !m.role.startsWith("_"))))
       .catch((err) => setContextError(err.message))
       .finally(() => setContextLoading(false));
-  }, [sessionId, refreshKey]);
+  }, [sessionId, refreshKey, agentScope]);
 
   // Build bidirectional mapping: tool_call_id -> wire event index
   const wireToolCallIdToIndex = useMemo(() => {

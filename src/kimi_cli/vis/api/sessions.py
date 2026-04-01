@@ -87,6 +87,47 @@ def get_work_dir_for_hash(hash_dir_name: str) -> str | None:
     return None
 
 
+def _extract_title_from_wire(wire_path: Path, max_bytes: int = 8192) -> tuple[str, int]:
+    """Extract title and turn count from the beginning of wire.jsonl.
+
+    Only reads up to *max_bytes* to avoid blocking on large files.
+    Returns (title, turn_count).
+    """
+    title = ""
+    turn_count = 0
+    try:
+        with wire_path.open(encoding="utf-8") as f:
+            bytes_read = 0
+            for line in f:
+                bytes_read += len(line.encode("utf-8"))
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = parse_wire_file_line(line)
+                except Exception:
+                    continue
+                if isinstance(parsed, WireFileMetadata):
+                    continue
+                if parsed.message.type == "TurnBegin":
+                    turn_count += 1
+                    if turn_count == 1:
+                        user_input = parsed.message.payload.get("user_input", "")
+                        if isinstance(user_input, str):
+                            title = user_input[:100]
+                        elif isinstance(user_input, list) and user_input:
+                            first = user_input[0]
+                            if isinstance(first, dict):
+                                title = str(first.get("text", ""))[:100]
+                # Stop once we exceed the byte budget — title is extracted from
+                # the first TurnBegin so this is a hard upper bound on I/O.
+                if bytes_read > max_bytes:
+                    break
+    except Exception:
+        pass
+    return title, turn_count
+
+
 def _scan_session_dir(
     session_dir: Path,
     work_dir_hash: str,
@@ -102,53 +143,48 @@ def _scan_session_dir(
     context_path = session_dir / "context.jsonl"
     state_path = session_dir / "state.json"
 
+    wire_exists = wire_path.exists()
+    context_exists = context_path.exists()
+    state_exists = state_path.exists()
+
     # Get last updated time from most recent file
     mtimes: list[float] = []
-    for p in [wire_path, context_path, state_path]:
-        if p.exists():
-            mtimes.append(p.stat().st_mtime)
+    wire_size = context_size = state_size = 0
+    if wire_exists:
+        st = wire_path.stat()
+        mtimes.append(st.st_mtime)
+        wire_size = st.st_size
+    if context_exists:
+        st = context_path.stat()
+        mtimes.append(st.st_mtime)
+        context_size = st.st_size
+    if state_exists:
+        st = state_path.stat()
+        mtimes.append(st.st_mtime)
+        state_size = st.st_size
 
-    # Extract title and count turns from wire.jsonl
-    title = ""
-    turn_count = 0
-    if wire_path.exists():
-        try:
-            with wire_path.open(encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        parsed = parse_wire_file_line(line)
-                    except Exception:
-                        logger.debug("Skipped malformed line in %s", wire_path)
-                        continue
-                    if isinstance(parsed, WireFileMetadata):
-                        continue
-                    if parsed.message.type == "TurnBegin":
-                        turn_count += 1
-                        if turn_count == 1:
-                            user_input = parsed.message.payload.get("user_input", "")
-                            if isinstance(user_input, str):
-                                title = user_input[:100]
-                            elif isinstance(user_input, list) and user_input:
-                                first = user_input[0]
-                                if isinstance(first, dict):
-                                    title = str(first.get("text", ""))[:100]
-        except Exception:
-            pass
-
-    # File sizes (cheap stat calls)
-    wire_size = wire_path.stat().st_size if wire_path.exists() else 0
-    context_size = context_path.stat().st_size if context_path.exists() else 0
-    state_size = state_path.stat().st_size if state_path.exists() else 0
-
-    # Read metadata.json if it exists
+    # Read metadata.json first (cheap); it may already contain the title
     metadata_info: dict[str, Any] | None = None
     metadata_path = session_dir / "metadata.json"
     if metadata_path.exists():
         with contextlib.suppress(Exception):
             metadata_info = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    # Always extract turn_count from wire.jsonl (cheap — bounded by max_bytes).
+    # Use metadata title if available, falling back to the wire-extracted one.
+    title = ""
+    turn_count = 0
+    if wire_exists:
+        title, turn_count = _extract_title_from_wire(wire_path)
+    metadata_title = (metadata_info or {}).get("title", "")
+    if metadata_title and metadata_title != "Untitled Session":
+        title = metadata_title
+
+    # Count sub-agents
+    subagent_count = 0
+    subagents_dir = session_dir / "subagents"
+    if subagents_dir.is_dir():
+        subagent_count = sum(1 for p in subagents_dir.iterdir() if p.is_dir())
 
     return {
         "session_id": session_dir.name,
@@ -157,9 +193,9 @@ def _scan_session_dir(
         "work_dir_hash": work_dir_hash,
         "title": title,
         "last_updated": max(mtimes) if mtimes else 0,
-        "has_wire": wire_path.exists(),
-        "has_context": context_path.exists(),
-        "has_state": state_path.exists(),
+        "has_wire": wire_exists,
+        "has_context": context_exists,
+        "has_state": state_exists,
         "metadata": metadata_info,
         "wire_size": wire_size,
         "context_size": context_size,
@@ -167,15 +203,14 @@ def _scan_session_dir(
         "total_size": wire_size + context_size + state_size,
         "turns": turn_count,
         "imported": imported,
+        "subagent_count": subagent_count,
     }
 
 
-@router.get("/sessions")
-def list_sessions() -> list[dict[str, Any]]:
-    """List all available sessions across all work directories."""
+def _list_sessions_sync() -> list[dict[str, Any]]:
+    """Synchronous session scanning — called from a thread pool."""
     results: list[dict[str, Any]] = []
 
-    # Scan normal sessions
     sessions_root = get_share_dir() / "sessions"
     if sessions_root.exists():
         for work_dir_hash_dir in sessions_root.iterdir():
@@ -187,7 +222,6 @@ def list_sessions() -> list[dict[str, Any]]:
                 if info:
                     results.append(info)
 
-    # Scan imported sessions
     imported_root = _get_imported_root()
     if imported_root.exists():
         for session_dir in imported_root.iterdir():
@@ -202,6 +236,15 @@ def list_sessions() -> list[dict[str, Any]]:
 
     results.sort(key=lambda s: s["last_updated"], reverse=True)
     return results
+
+
+@router.get("/sessions")
+async def list_sessions() -> list[dict[str, Any]]:
+    """List all available sessions across all work directories."""
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _list_sessions_sync)
 
 
 @router.get("/sessions/{work_dir_hash}/{session_id}/wire")
@@ -398,6 +441,151 @@ async def get_session_summary(work_dir_hash: str, session_id: str) -> dict[str, 
     }
 
 
+@router.get("/sessions/{work_dir_hash}/{session_id}/subagents")
+def list_subagents(work_dir_hash: str, session_id: str) -> list[dict[str, Any]]:
+    """List all sub-agents for a session."""
+    session_dir = _find_session_dir(work_dir_hash, session_id)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    subagents_dir = session_dir / "subagents"
+    if not subagents_dir.is_dir():
+        return []
+
+    results: list[dict[str, Any]] = []
+    for entry in subagents_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if not _SESSION_ID_RE.match(entry.name):
+            continue
+
+        meta_path = entry / "meta.json"
+        meta: dict[str, Any] = {}
+        if meta_path.exists():
+            with contextlib.suppress(Exception):
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+        wire_path = entry / "wire.jsonl"
+        context_path = entry / "context.jsonl"
+        results.append(
+            {
+                "agent_id": meta.get("agent_id", entry.name),
+                "subagent_type": meta.get("subagent_type", "unknown"),
+                "status": meta.get("status", "unknown"),
+                "description": meta.get("description", ""),
+                "created_at": meta.get("created_at", 0),
+                "updated_at": meta.get("updated_at", 0),
+                "last_task_id": meta.get("last_task_id"),
+                "launch_spec": meta.get("launch_spec", {}),
+                "wire_size": wire_path.stat().st_size if wire_path.exists() else 0,
+                "context_size": context_path.stat().st_size if context_path.exists() else 0,
+            }
+        )
+
+    results.sort(key=lambda s: s.get("created_at", 0))
+    return results
+
+
+@router.get("/sessions/{work_dir_hash}/{session_id}/subagents/{agent_id}/wire")
+async def get_subagent_wire_events(
+    work_dir_hash: str, session_id: str, agent_id: str
+) -> dict[str, Any]:
+    """Read and parse wire.jsonl for a specific sub-agent."""
+    if not _SESSION_ID_RE.match(agent_id):
+        raise HTTPException(status_code=400, detail="Invalid agent ID")
+
+    session_dir = _find_session_dir(work_dir_hash, session_id)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    wire_path = session_dir / "subagents" / agent_id / "wire.jsonl"
+    if not wire_path.exists():
+        return {"total": 0, "events": []}
+
+    events: list[dict[str, Any]] = []
+    index = 0
+    async with aiofiles.open(wire_path, encoding="utf-8") as f:
+        async for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = parse_wire_file_line(line)
+            except Exception:
+                logger.debug("Skipped malformed line in %s", wire_path)
+                continue
+            if isinstance(parsed, WireFileMetadata):
+                continue
+            events.append(
+                {
+                    "index": index,
+                    "timestamp": parsed.timestamp,
+                    "type": parsed.message.type,
+                    "payload": parsed.message.payload,
+                }
+            )
+            index += 1
+
+    return {"total": len(events), "events": events}
+
+
+@router.get("/sessions/{work_dir_hash}/{session_id}/subagents/{agent_id}/context")
+async def get_subagent_context(
+    work_dir_hash: str, session_id: str, agent_id: str
+) -> dict[str, Any]:
+    """Read and parse context.jsonl for a specific sub-agent."""
+    if not _SESSION_ID_RE.match(agent_id):
+        raise HTTPException(status_code=400, detail="Invalid agent ID")
+
+    session_dir = _find_session_dir(work_dir_hash, session_id)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    context_path = session_dir / "subagents" / agent_id / "context.jsonl"
+    if not context_path.exists():
+        return {"total": 0, "messages": []}
+
+    messages: list[dict[str, Any]] = []
+    index = 0
+    async with aiofiles.open(context_path, encoding="utf-8") as f:
+        async for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug("Skipped malformed line in %s", context_path)
+                continue
+            msg["index"] = index
+            messages.append(msg)
+            index += 1
+
+    return {"total": len(messages), "messages": messages}
+
+
+@router.get("/sessions/{work_dir_hash}/{session_id}/subagents/{agent_id}/meta")
+async def get_subagent_meta(work_dir_hash: str, session_id: str, agent_id: str) -> dict[str, Any]:
+    """Read meta.json for a specific sub-agent."""
+    if not _SESSION_ID_RE.match(agent_id):
+        raise HTTPException(status_code=400, detail="Invalid agent ID")
+
+    session_dir = _find_session_dir(work_dir_hash, session_id)
+    if session_dir is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    meta_path = session_dir / "subagents" / agent_id / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Sub-agent not found")
+
+    async with aiofiles.open(meta_path, encoding="utf-8") as f:
+        content = await f.read()
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=500, detail="Invalid meta.json") from err
+
+
 @router.get("/sessions/{work_dir_hash}/{session_id}/download")
 def download_session(work_dir_hash: str, session_id: str) -> StreamingResponse:
     """Download all files in a session directory as a ZIP archive."""
@@ -407,9 +595,9 @@ def download_session(work_dir_hash: str, session_id: str) -> StreamingResponse:
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(session_dir.iterdir()):
+        for file_path in sorted(session_dir.rglob("*")):
             if file_path.is_file():
-                zf.write(file_path, arcname=file_path.name)
+                zf.write(file_path, arcname=str(file_path.relative_to(session_dir)))
     buf.seek(0)
 
     filename = f"session-{session_id}.zip"

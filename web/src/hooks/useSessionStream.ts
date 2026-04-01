@@ -126,10 +126,12 @@ import {
   type JsonRpcRequest,
   type JsonRpcResponse,
   type ApprovalRequestEvent,
+  type ApprovalRequestResolvedEvent,
   type ApprovalResponseDecision,
   type QuestionRequestEvent,
   type SessionStatusPayload,
   type SubagentEventWire,
+  type PlanDisplayEvent,
   extractEvent,
 } from "./wireTypes";
 import { createMessageId, getApiBaseUrl } from "./utils";
@@ -408,6 +410,57 @@ export function useSessionStream(
     );
   }, [setMessages]);
 
+  // Mark all non-terminal tool calls as interrupted and dismiss stale
+  // approval/question dialogs.  Called only when the backend confirms no
+  // active turn (idle / stopped / error), so it won't dismiss legitimate
+  // pending approvals on a busy session (e.g. after a tab switch).
+  const interruptStaleToolCalls = useCallback(() => {
+    pendingApprovalRequestsRef.current.clear();
+    pendingQuestionRequestsRef.current.clear();
+    setMessages((prev) =>
+      prev.map((msg) => {
+        if (msg.variant !== "tool" || !msg.toolCall) return msg;
+        const state = msg.toolCall.state;
+        if (
+          state === "approval-requested" ||
+          state === "question-requested" ||
+          state === "input-streaming" ||
+          state === "input-available"
+        ) {
+          return {
+            ...msg,
+            isStreaming: false,
+            toolCall: {
+              ...msg.toolCall,
+              state: "output-denied",
+              ...(state === "approval-requested" && msg.toolCall.approval
+                ? {
+                    approval: {
+                      ...msg.toolCall.approval,
+                      submitted: true,
+                      resolved: true,
+                      approved: false,
+                      response: "reject",
+                    },
+                  }
+                : {}),
+              ...(state === "question-requested" && msg.toolCall.question
+                ? {
+                    question: {
+                      ...msg.toolCall.question,
+                      submitted: true,
+                      resolved: true,
+                    },
+                  }
+                : {}),
+            },
+          };
+        }
+        return msg;
+      }),
+    );
+  }, [setMessages]);
+
   const applySessionStatus = useCallback(
     (payload: SessionStatusPayload) => {
       const normalized = normalizeSessionStatus(payload);
@@ -437,6 +490,7 @@ export function useSessionStream(
           setAwaitingFirstResponse(false);
           awaitingIdleRef.current = false;
           completeStreamingMessages();
+          interruptStaleToolCalls();
           break;
         }
         case "stopped":
@@ -445,6 +499,7 @@ export function useSessionStream(
           setAwaitingFirstResponse(false);
           awaitingIdleRef.current = false;
           completeStreamingMessages();
+          interruptStaleToolCalls();
 
           // Trigger onFirstTurnComplete only after at least one turn has completed
           if (hasTurnStartedRef.current && !firstTurnCompleteCalledRef.current) {
@@ -457,6 +512,7 @@ export function useSessionStream(
     },
     [
       completeStreamingMessages,
+      interruptStaleToolCalls,
       normalizeSessionStatus,
       onSessionStatus,
       setAwaitingFirstResponse,
@@ -823,13 +879,19 @@ export function useSessionStream(
     }
   }, [resetStepState, setAwaitingFirstResponse]);
 
-  // Process a SubagentEvent: accumulate inner events into parent Task tool's subagentSteps
+  // Process a SubagentEvent: accumulate inner events into parent Agent tool's subagentSteps
   const processSubagentEvent = useCallback(
-    (taskToolCallId: string, innerType: string, innerPayload: unknown) => {
+    (
+      parentToolCallId: string,
+      innerType: string,
+      innerPayload: unknown,
+      agentId?: string,
+      subagentType?: string,
+    ) => {
       setMessages((prev) => {
-        // Find the parent Task tool message by toolCallId
+        // Find the parent Agent tool message by toolCallId
         const parentIdx = prev.findIndex(
-          (msg) => msg.toolCall?.toolCallId === taskToolCallId,
+          (msg) => msg.toolCall?.toolCallId === parentToolCallId,
         );
         if (parentIdx === -1) return prev;
 
@@ -971,6 +1033,11 @@ export function useSessionStream(
             ...parentMsg.toolCall!,
             subagentSteps: steps,
             subagentRunning: true,
+            // Preserve existing values; only set if provided and not yet set
+            subagentType:
+              parentMsg.toolCall?.subagentType ?? subagentType,
+            subagentAgentId:
+              parentMsg.toolCall?.subagentAgentId ?? agentId,
           },
         };
         return next;
@@ -1289,7 +1356,7 @@ export function useSessionStream(
                     ? messageStr || undefined
                     : undefined,
                   mediaParts: mediaParts.length > 0 ? mediaParts : undefined,
-                  // Mark subagent as complete when its parent Task tool receives result
+                  // Mark subagent as complete when its parent Agent tool receives result
                   subagentRunning: msg.toolCall.subagentSteps
                     ? false
                     : msg.toolCall.subagentRunning,
@@ -1331,7 +1398,7 @@ export function useSessionStream(
           if (!isReplay) {
             clearAwaitingFirstResponse();
           }
-          const payload = event.payload;
+          const payload = (event as ApprovalRequestEvent).payload;
           const tc = currentToolCallsRef.current.get(payload.tool_call_id);
 
           const approvalState = {
@@ -1343,6 +1410,8 @@ export function useSessionStream(
             rpcMessageId,
             submitted: false,
             resolved: false,
+            sourceKind: payload.source_kind ?? null,
+            sourceDescription: payload.source_description ?? null,
           };
 
           if (tc) {
@@ -1364,6 +1433,10 @@ export function useSessionStream(
 
           let messageId = tc?.messageId;
 
+          const approvalDisplay = payload.display?.length
+            ? payload.display
+            : undefined;
+
           if (messageId) {
             updateMessageById(messageId, (message) => {
               if (!message.toolCall) {
@@ -1376,10 +1449,13 @@ export function useSessionStream(
                   ...message.toolCall,
                   state: "approval-requested",
                   approval: approvalState,
+                  // Show approval preview (diff/command) if tool has no display yet
+                  display: message.toolCall.display ?? approvalDisplay,
                 },
               };
             });
           } else {
+            const isSubagentOrigin = Boolean(payload.agent_id);
             const fallbackMessageId = getNextMessageId("assistant");
             const approvalMessage: LiveMessage = {
               id: fallbackMessageId,
@@ -1391,6 +1467,12 @@ export function useSessionStream(
                 type: "tool-call" as ToolUIPart["type"],
                 state: "approval-requested",
                 approval: approvalState,
+                display: approvalDisplay,
+                ...(isSubagentOrigin && {
+                  isSubagentOrigin: true,
+                  subagentType: payload.subagent_type ?? undefined,
+                  subagentAgentId: payload.agent_id ?? undefined,
+                }),
               },
             };
 
@@ -1420,7 +1502,8 @@ export function useSessionStream(
         }
 
         case "ApprovalRequestResolved": {
-          const { request_id, response } = event.payload;
+          const { request_id, response, feedback } =
+            event.payload as ApprovalRequestResolvedEvent["payload"];
           const pending = pendingApprovalRequestsRef.current.get(request_id);
 
           let tc: ToolCallState | undefined;
@@ -1478,13 +1561,14 @@ export function useSessionStream(
             }
           }
 
+          const effectiveReason = reason ?? feedback ?? approval.reason;
           const updatedApproval = {
             ...approval,
             response,
             resolved: true,
             submitted: true,
             approved,
-            reason: reason ?? approval.reason,
+            reason: effectiveReason,
           };
 
           if (tc) {
@@ -1493,13 +1577,30 @@ export function useSessionStream(
 
           const messageId = tc?.messageId ?? pending?.messageId;
           const nextState =
-            approved === false ? "output-denied" : "approval-responded";
+            approved === false ? "output-denied" : "input-available";
           const nextStreaming = approved !== false;
 
           if (messageId) {
             updateMessageById(messageId, (message) => {
               if (!message.toolCall) {
                 return message;
+              }
+
+              // Don't overwrite terminal states — a late ApprovalRequestResolved
+              // arriving after cancel() must not flip a denied tool back to active.
+              const currentState = message.toolCall.state;
+              if (
+                currentState === "output-denied" ||
+                currentState === "output-available" ||
+                currentState === "output-error"
+              ) {
+                return {
+                  ...message,
+                  toolCall: {
+                    ...message.toolCall,
+                    approval: updatedApproval,
+                  },
+                };
               }
 
               return {
@@ -1602,11 +1703,19 @@ export function useSessionStream(
 
         case "SubagentEvent": {
           const subPayload = (event as SubagentEventWire).payload;
-          processSubagentEvent(
-            subPayload.task_tool_call_id,
-            subPayload.event.type,
-            subPayload.event.payload,
-          );
+          // Wire 1.6 uses parent_tool_call_id; fall back to legacy task_tool_call_id
+          const parentToolCallId =
+            subPayload.parent_tool_call_id ??
+            (subPayload as Record<string, unknown>).task_tool_call_id as string | undefined;
+          if (parentToolCallId) {
+            processSubagentEvent(
+              parentToolCallId,
+              subPayload.event.type,
+              subPayload.event.payload,
+              subPayload.agent_id ?? undefined,
+              subPayload.subagent_type ?? undefined,
+            );
+          }
           break;
         }
 
@@ -1738,6 +1847,20 @@ export function useSessionStream(
                   },
                 };
               }
+              // Mark still-running tool calls as interrupted
+              if (
+                msg.variant === "tool" &&
+                (updated.toolCall?.state === "input-streaming" ||
+                  updated.toolCall?.state === "input-available")
+              ) {
+                return {
+                  ...updated,
+                  toolCall: {
+                    ...updated.toolCall,
+                    state: "output-denied",
+                  },
+                };
+              }
               return updated;
             }),
           );
@@ -1810,6 +1933,23 @@ export function useSessionStream(
           break;
         }
 
+        case "PlanDisplay": {
+          const planPayload = (event as PlanDisplayEvent).payload;
+          const planMessageId = getNextMessageId("assistant");
+          upsertMessage({
+            id: planMessageId,
+            role: "assistant",
+            variant: "text",
+            turnIndex:
+              turnCounterRef.current > 0
+                ? turnCounterRef.current - 1
+                : undefined,
+            content: planPayload.content,
+            isStreaming: false,
+          });
+          break;
+        }
+
         default:
           break;
       }
@@ -1837,7 +1977,7 @@ export function useSessionStream(
       method: "initialize",
       id,
       params: {
-        protocol_version: "1.5",
+        protocol_version: "1.8",
         client: {
           name: "kiwi",
           version: kimiCliVersion,
@@ -1904,9 +2044,14 @@ export function useSessionStream(
           return;
         }
 
-        // Check for finished status
-        if (message.result?.status === "finished") {
-          console.log("[SessionStream] Stream finished");
+        // Check for finished or cancelled status
+        if (
+          message.result?.status === "finished" ||
+          message.result?.status === "cancelled"
+        ) {
+          console.log(
+            `[SessionStream] Stream ${message.result.status}`,
+          );
           setStatus("ready");
           setAwaitingFirstResponse(false);
           awaitingIdleRef.current = false;
@@ -2106,6 +2251,9 @@ export function useSessionStream(
         result: {
           request_id: pending.requestId ?? requestId,
           response,
+          ...(response === "reject" && trimmedReason
+            ? { feedback: trimmedReason }
+            : {}),
         },
       };
 
@@ -2119,7 +2267,7 @@ export function useSessionStream(
       pendingApprovalRequestsRef.current.set(requestId, pending);
 
       const tc = currentToolCallsRef.current.get(pending.toolCallId);
-      const nextState = isApproved ? "approval-responded" : "output-denied";
+      const nextState = isApproved ? "input-available" : "output-denied";
       const nextStreaming = isApproved;
 
       if (tc) {
@@ -2485,6 +2633,21 @@ export function useSessionStream(
               },
             };
           }
+          // Mark still-running tool calls as interrupted
+          if (
+            msg.variant === "tool" &&
+            (msg.toolCall?.state === "input-streaming" ||
+              msg.toolCall?.state === "input-available")
+          ) {
+            return {
+              ...msg,
+              isStreaming: false,
+              toolCall: {
+                ...msg.toolCall,
+                state: "output-denied",
+              },
+            };
+          }
           return msg;
         }),
       );
@@ -2538,6 +2701,21 @@ export function useSessionStream(
                     resolved: true,
                   }
                 : undefined,
+            },
+          };
+        }
+        // Mark still-running tool calls as interrupted
+        if (
+          msg.variant === "tool" &&
+          (msg.toolCall?.state === "input-streaming" ||
+            msg.toolCall?.state === "input-available")
+        ) {
+          return {
+            ...msg,
+            isStreaming: false,
+            toolCall: {
+              ...msg.toolCall,
+              state: "output-denied",
             },
           };
         }

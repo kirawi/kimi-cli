@@ -14,7 +14,7 @@ kimi --agent okabe
 
 默认 Agent，适合通常情况使用。启用的工具：
 
-`Task`、`AskUserQuestion`、`SetTodoList`、`Shell`、`ReadFile`、`ReadMediaFile`、`Glob`、`Grep`、`WriteFile`、`StrReplaceFile`、`SearchWeb`、`FetchURL`、`EnterPlanMode`、`ExitPlanMode`
+`Agent`、`AskUserQuestion`、`SetTodoList`、`Shell`、`ReadFile`、`ReadMediaFile`、`Glob`、`Grep`、`WriteFile`、`StrReplaceFile`、`SearchWeb`、`FetchURL`、`EnterPlanMode`、`ExitPlanMode`、`TaskList`、`TaskOutput`、`TaskStop`
 
 ### `okabe`
 
@@ -71,7 +71,7 @@ agent:
 
 ## 系统提示词内置参数
 
-系统提示词文件是一个 Markdown 模板，可以使用 `${VAR}` 语法引用变量。内置变量包括：
+系统提示词文件是一个 Markdown 模板，可以使用 `${VAR}` 语法引用变量，也支持 Jinja2 的 `{% include %}` 指令来引入其他文件。内置变量包括：
 
 | 变量 | 说明 |
 |------|------|
@@ -106,7 +106,7 @@ ${MY_VAR}
 
 ## 在 Agent 文件中定义子 Agent
 
-子 Agent 可以处理特定类型的任务。在 Agent 文件中定义子 Agent 后，主 Agent 可以通过 `Task` 工具启动它们：
+子 Agent 可以处理特定类型的任务。在 Agent 文件中定义子 Agent 后，主 Agent 可以通过 `Agent` 工具启动它们：
 
 ```yaml
 version: 1
@@ -121,52 +121,56 @@ agent:
       description: "代码审查专家"
 ```
 
-子 Agent 文件也是标准的 Agent 格式，通常会继承主 Agent 并排除某些工具：
+子 Agent 文件也是标准的 Agent 格式，通常会继承主 Agent：
 
 ```yaml
-# coder-sub.yaml
+# coder.yaml
 version: 1
 agent:
   extend: ./agent.yaml  # 继承主 Agent
   system_prompt_args:
     ROLE_ADDITIONAL: |
       你现在作为子 Agent 运行...
-  exclude_tools:
-    - "kimi_cli.tools.multiagent:Task"  # 排除 Task 工具，避免嵌套
 ```
+
+## 内置子 Agent 类型
+
+默认 Agent 配置包含三种内置子 Agent 类型，各自有不同的工具策略和适用场景：
+
+| 类型 | 用途 | 可用工具 |
+|------|------|---------|
+| `coder` | 通用软件工程：读写文件、运行命令、搜索代码 | `Shell`、`ReadFile`、`Glob`、`Grep`、`WriteFile`、`StrReplaceFile`、`SearchWeb`、`FetchURL` |
+| `explore` | 快速只读代码探索：搜索、阅读、总结 | `Shell`、`ReadFile`、`Glob`、`Grep`、`SearchWeb`、`FetchURL`（无写入工具） |
+| `plan` | 实现规划与架构设计：分析文件、制定方案 | `ReadFile`、`Glob`、`Grep`、`SearchWeb`、`FetchURL`（无 Shell、无写入工具） |
+
+所有子 Agent 类型均不可嵌套使用 `Agent` 工具（即子 Agent 不能创建自己的子 Agent）。`Agent` 工具仅在根 Agent 中可用。
 
 ## 子 Agent 的运行方式
 
-通过 `Task` 工具启动的子 Agent 会在独立的上下文中运行，完成后将结果返回给主 Agent。这种方式的优势：
+通过 `Agent` 工具启动的子 Agent 会在独立的上下文中运行，完成后将结果返回给主 Agent。每个子 Agent 实例在会话目录的 `subagents/<agent_id>/` 下维护独立的上下文历史和元数据，可以被多次恢复继续使用。这种方式的优势：
 
 - 隔离上下文，避免污染主 Agent 的对话历史
 - 可以并行处理多个独立任务
 - 子 Agent 可以有针对性的系统提示词
-
-## 动态创建子 Agent
-
-`CreateSubagent` 是一个高级工具，允许 AI 在运行时动态定义新的子 Agent 类型（默认未启用）。动态创建的子 Agent 会随会话状态持久化，恢复会话时自动还原。如需使用，在 Agent 文件中添加：
-
-```yaml
-agent:
-  tools:
-    - "kimi_cli.tools.multiagent:CreateSubagent"
-```
+- 持久实例可跨多次调用保留上下文
 
 ## 内置工具列表
 
 以下是 Kimi Code CLI 内置的所有工具。
 
-### `Task`
+### `Agent`
 
-- **路径**：`kimi_cli.tools.multiagent:Task`
-- **描述**：调度子 Agent 执行任务。子 Agent 无法访问主 Agent 的上下文，需在 prompt 中提供所有必要信息。
+- **路径**：`kimi_cli.tools.agent:Agent`
+- **描述**：启动或恢复子 Agent 实例处理聚焦任务。内置三种子 Agent 类型：`coder`（通用软件工程）、`explore`（快速只读代码探索）、`plan`（实现规划与架构设计）。每个实例维护独立的上下文历史，支持前台或后台运行。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `description` | string | 任务简短描述（3-5 词） |
-| `subagent_name` | string | 子 Agent 名称 |
 | `prompt` | string | 任务详细描述 |
+| `subagent_type` | string | 内置子 Agent 类型，默认 `coder` |
+| `model` | string | 可选的模型覆盖 |
+| `resume` | string | 可选的 Agent 实例 ID，用于恢复现有实例 |
+| `run_in_background` | bool | 是否在后台运行，默认 false |
 
 ### `AskUserQuestion`
 
@@ -202,7 +206,11 @@ agent:
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `command` | string | 要执行的命令 |
-| `timeout` | int | 超时时间（秒），默认 60，最大 300 |
+| `timeout` | int | 超时时间（秒），默认 60，前台最大 300 / 后台最大 86400 |
+| `run_in_background` | bool | 是否作为后台任务运行，默认 false |
+| `description` | string | 后台任务的简短描述，`run_in_background=true` 时必填 |
+
+设置 `run_in_background=true` 后，命令会作为后台任务启动，工具立即返回任务 ID，AI 可以继续执行其他操作。任务完成时系统自动发送通知。适用于耗时的构建、测试、监控等场景。
 
 ### `ReadFile`
 
@@ -227,7 +235,7 @@ agent:
 ### `Glob`
 
 - **路径**：`kimi_cli.tools.file:Glob`
-- **描述**：按模式匹配文件和目录。最多返回 1000 个匹配项，不允许以 `**` 开头的模式。
+- **描述**：按模式匹配文件和目录。最多返回 1000 个匹配项，不允许以 `**` 开头的模式。支持搜索已发现的 Skill 根目录，路径中的 `~` 会自动展开为用户主目录。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -328,19 +336,43 @@ agent:
 ### `ExitPlanMode`
 
 - **路径**：`kimi_cli.tools.plan:ExitPlanMode`
-- **描述**：在 Plan 模式下完成方案后提交审批。调用前需先将方案写入 plan 文件，此工具会读取 plan 文件内容并展示给用户审批。用户可以批准（退出 Plan 模式并开始执行）、拒绝（保持 Plan 模式等待反馈）或提供修改意见。详见 [Plan 模式](../guides/interaction.md#plan-模式)。
-
-此工具不接受参数。
-
-### `CreateSubagent`
-
-- **路径**：`kimi_cli.tools.multiagent:CreateSubagent`
-- **描述**：动态创建子 Agent
+- **描述**：在 Plan 模式下完成方案后提交审批。调用前需先将方案写入 plan 文件，此工具会读取 plan 文件内容并展示给用户审批。用户可以选择某个实施路径（退出 Plan 模式并开始执行）、拒绝（保持 Plan 模式等待反馈）或提供修改意见。详见 [Plan 模式](../guides/interaction.md#plan-模式)。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `name` | string | 子 Agent 的唯一名称，用于在 `Task` 工具中引用 |
-| `system_prompt` | string | 定义 Agent 角色、能力和边界的系统提示词 |
+| `options` | list \| null | 当方案包含多个可选实施路径时，列出 2–3 个选项供用户选择。每个选项有 `label`（1–8 个词的简短标签，可附加 "(Recommended)"）和可选的 `description`（方案摘要）。不可使用 "Approve"、"Reject"、"Revise" 作为标签名。 |
+
+### `TaskList`
+
+- **路径**：`kimi_cli.tools.background:TaskList`
+- **描述**：列出当前会话中的后台任务。适用于上下文压缩后重新获取任务 ID，或检查哪些任务仍在运行。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `active_only` | bool | 是否仅列出活跃任务，默认 true |
+| `limit` | int | 返回的最大任务数（1–100），默认 20 |
+
+### `TaskOutput`
+
+- **路径**：`kimi_cli.tools.background:TaskOutput`
+- **描述**：获取后台任务的输出和状态。默认为非阻塞查询，返回当前状态和输出快照；如果输出被截断，可使用 `ReadFile` 分页读取完整日志。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | string | 要查询的任务 ID |
+| `block` | bool | 是否等待任务完成，默认 false |
+| `timeout` | int | `block=true` 时的最大等待秒数（0–3600），默认 30 |
+
+### `TaskStop`
+
+- **路径**：`kimi_cli.tools.background:TaskStop`
+- **描述**：停止正在运行的后台任务。需要用户审批。仅在任务必须取消时使用；对于正常完成的任务，应等待自动通知。在 Plan 模式下不可用。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | string | 要停止的任务 ID |
+| `reason` | string | 停止原因（可选），默认 "Stopped by TaskStop" |
+
 
 ## 工具安全边界
 
@@ -359,3 +391,4 @@ agent:
 | Shell 命令执行 | 每次执行 |
 | 文件写入/编辑 | 每次操作 |
 | MCP 工具调用 | 每次调用 |
+| 停止后台任务 | 每次停止 |

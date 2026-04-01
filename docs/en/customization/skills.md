@@ -8,6 +8,15 @@ A skill is a directory containing a `SKILL.md` file. When Kimi Code CLI starts, 
 
 For example, you can create a "code style" skill to tell the AI your project's naming conventions, comment styles, etc.; or create a "security audit" skill to have the AI focus on specific security issues when reviewing code.
 
+**Skills vs plugins**
+
+Kimi Code CLI supports two extension mechanisms:
+
+- **Skills**: Provide knowledge-based guidance through `SKILL.md`; the AI reads and follows the specifications. Suitable for defining code styles, workflows, and best practices.
+- **Plugins**: Declare executable tools through `plugin.json`; the AI can directly invoke tools to get results. Suitable for wrapping scripts, API calls, and database queries.
+
+For details about plugins, see the [Plugins](./plugins.md) documentation.
+
 ## Skill discovery
 
 Kimi Code CLI uses a layered loading mechanism to discover skills, loading in the following priority order (later ones override skills with the same name):
@@ -35,14 +44,14 @@ Stored in the project directory, only effective within that project's working di
 3. `.claude/skills/`
 4. `.codex/skills/`
 
-You can also specify other directories with the `--skills-dir` flag, which skips user-level and project-level skill discovery:
+You can also append additional skills directories with the `--skills-dir` flag. This flag can be specified multiple times, and the directories are merged with the auto-discovered ones:
 
 ```sh
-kimi --skills-dir /path/to/my-skills
+kimi --skills-dir /path/to/my-skills --skills-dir /path/to/more-skills
 ```
 
 ::: tip
-Skills paths are independent of [`KIMI_SHARE_DIR`](../configuration/env-vars.md#kimi-share-dir). `KIMI_SHARE_DIR` customizes the storage location for configuration, sessions, logs, and other runtime data, but does not affect Skills search paths. Skills are cross-tool shared capability extensions (compatible with Kimi CLI, Claude, Codex, and others), which is a different type of data from application runtime data. To override Skills paths, use the `--skills-dir` flag.
+Skills paths are independent of [`KIMI_SHARE_DIR`](../configuration/env-vars.md#kimi-share-dir). `KIMI_SHARE_DIR` customizes the storage location for configuration, sessions, logs, and other runtime data, but does not affect Skills search paths. Skills are cross-tool shared capability extensions (compatible with Kimi CLI, Claude, Codex, and others), which is a different type of data from application runtime data. To append additional skills paths, use the `--skills-dir` flag.
 :::
 
 ## Built-in skills

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { type ContextMessage, getContextMessages, normalizeContent } from "@/lib/api";
+import { type ContextMessage, getContextMessages, getSubagentContextMessages, normalizeContent } from "@/lib/api";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
 import { ToolMessage } from "./tool-call-block";
@@ -31,6 +31,8 @@ interface ContextViewerProps {
   scrollToToolCallId?: string | null;
   /** Called after the scroll target has been consumed */
   onScrollTargetConsumed?: () => void;
+  /** When set, show context for this sub-agent instead of the main agent */
+  agentScope?: string | null;
 }
 
 /** React context for cross-reference navigation */
@@ -72,7 +74,41 @@ function MetadataRow({ message }: { message: ContextMessage }) {
   );
 }
 
-export function ContextViewer({ sessionId, refreshKey = 0, onNavigateToWire, scrollToToolCallId, onScrollTargetConsumed }: ContextViewerProps) {
+/** Dedicated viewer for _system_prompt — the most important context for debugging */
+function SystemPromptRow({ message }: { message: ContextMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const content = typeof message.content === "string" ? message.content : String((message as Record<string, unknown>).content ?? "");
+  const charCount = content.length;
+  const estimatedTokens = Math.round(charCount / 4);
+
+  return (
+    <div className="my-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left text-xs"
+      >
+        <FileText size={12} className="text-blue-500 shrink-0" />
+        <span className="font-medium text-blue-700 dark:text-blue-300">System Prompt</span>
+        <span className="text-[10px] text-muted-foreground font-mono">
+          ~{estimatedTokens.toLocaleString()} tokens · {charCount.toLocaleString()} chars
+        </span>
+        {expanded ? <ChevronDown size={11} className="ml-auto shrink-0" /> : <ChevronRight size={11} className="ml-auto shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="mt-2 max-h-[600px] overflow-auto text-xs text-muted-foreground">
+          <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">{content}</pre>
+        </div>
+      )}
+      {!expanded && content && (
+        <div className="mt-1 truncate text-[11px] text-muted-foreground font-mono">
+          {content.slice(0, 120)}{content.length > 120 ? "…" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ContextViewer({ sessionId, refreshKey = 0, onNavigateToWire, scrollToToolCallId, onScrollTargetConsumed, agentScope }: ContextViewerProps) {
   const [allMessages, setAllMessages] = useState<ContextMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +123,16 @@ export function ContextViewer({ sessionId, refreshKey = 0, onNavigateToWire, scr
   useEffect(() => {
     setLoading(true);
     setError(null);
-    getContextMessages(sessionId, refreshKey > 0)
+    const fetch = agentScope
+      ? getSubagentContextMessages(sessionId, agentScope, refreshKey > 0)
+      : getContextMessages(sessionId, refreshKey > 0);
+    fetch
       .then((res) => {
         setAllMessages(res.messages);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [sessionId, refreshKey]);
+  }, [sessionId, refreshKey, agentScope]);
 
   const visibleMessages = useMemo(
     () => showInternal ? allMessages : allMessages.filter((m) => !m.role.startsWith("_")),
@@ -227,6 +266,13 @@ export function ContextViewer({ sessionId, refreshKey = 0, onNavigateToWire, scr
     <RawModeContext.Provider value={rawMode}>
       <NavigateToWireContext.Provider value={onNavigateToWire ?? null}>
         <div className="h-full flex flex-col overflow-hidden">
+          {/* Agent scope indicator */}
+          {agentScope && (
+            <div className="flex items-center gap-2 px-4 py-1 border-b bg-indigo-500/5 text-[11px] text-indigo-600 dark:text-indigo-400 shrink-0">
+              <span className="font-medium">Sub-agent context</span>
+              <span className="font-mono text-[10px] text-muted-foreground">{agentScope.slice(0, 8)}</span>
+            </div>
+          )}
           {/* Stats bar */}
           <div className="flex items-center gap-2 px-4 py-1.5 border-b text-[11px] text-muted-foreground shrink-0">
             <span className="shrink-0">{allMessages.length} messages</span>
@@ -341,7 +387,10 @@ export function ContextViewer({ sessionId, refreshKey = 0, onNavigateToWire, scr
                   {message.role === "system" && (
                     <SystemMessage message={message} />
                   )}
-                  {message.role.startsWith("_") && (
+                  {message.role === "_system_prompt" && (
+                    <SystemPromptRow message={message} />
+                  )}
+                  {message.role.startsWith("_") && message.role !== "_system_prompt" && (
                     <MetadataRow message={message} />
                   )}
                   {!["user", "assistant", "tool", "system"].includes(message.role) &&

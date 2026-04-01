@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 
+from kimi_cli import logger
 from kimi_cli.auth.platforms import get_platform_name_for_provider, refresh_managed_models
-from kimi_cli.cli import Reload, SwitchToWeb
+from kimi_cli.cli import Reload, SwitchToVis, SwitchToWeb
 from kimi_cli.config import load_config, save_config
 from kimi_cli.exception import ConfigError
 from kimi_cli.session import Session
 from kimi_cli.soul.kimisoul import KimiSoul
 from kimi_cli.ui.shell.console import console
+from kimi_cli.ui.shell.mcp_status import render_mcp_console
+from kimi_cli.ui.shell.task_browser import TaskBrowserApp
 from kimi_cli.utils.changelog import CHANGELOG
 from kimi_cli.utils.datetime import format_relative_time
 from kimi_cli.utils.slashcmd import SlashCommand, SlashCommandRegistry
@@ -390,14 +394,95 @@ def changelog(app: Shell, args: str):
 
 @registry.command
 @shell_mode_registry.command
-def feedback(app: Shell, args: str):
+async def feedback(app: Shell, args: str):
     """Submit feedback to make Kimi Code CLI better"""
+    import platform
     import webbrowser
 
+    import aiohttp
+
+    from kimi_cli.auth import KIMI_CODE_PLATFORM_ID
+    from kimi_cli.auth.platforms import get_platform_by_id, managed_provider_key
+    from kimi_cli.constant import VERSION
+    from kimi_cli.ui.shell.oauth import current_model_key
+    from kimi_cli.utils.aiohttp import new_client_session
+
     ISSUE_URL = "https://github.com/MoonshotAI/kimi-cli/issues"
-    if webbrowser.open(ISSUE_URL):
+
+    def _fallback_to_issues():
+        if not webbrowser.open(ISSUE_URL):
+            console.print(f"Please submit feedback at [underline]{ISSUE_URL}[/underline].")
+
+    soul = ensure_kimi_soul(app)
+    if soul is None:
+        _fallback_to_issues()
         return
-    console.print(f"Please submit feedback at [underline]{ISSUE_URL}[/underline].")
+
+    kimi_platform = get_platform_by_id(KIMI_CODE_PLATFORM_ID)
+    if kimi_platform is None:
+        _fallback_to_issues()
+        return
+
+    provider = soul.runtime.config.providers.get(managed_provider_key(KIMI_CODE_PLATFORM_ID))
+    if provider is None or provider.oauth is None:
+        _fallback_to_issues()
+        return
+
+    from prompt_toolkit import PromptSession
+
+    prompt_session: PromptSession[str] = PromptSession()
+    try:
+        content = await prompt_session.prompt_async("Enter your feedback: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("[grey50]Feedback cancelled.[/grey50]")
+        return
+
+    content = content.strip()
+    if not content:
+        console.print("[yellow]Feedback cannot be empty.[/yellow]")
+        return
+
+    api_key = soul.runtime.oauth.resolve_api_key(provider.api_key, provider.oauth)
+    feedback_url = f"{kimi_platform.base_url.rstrip('/')}/feedback"
+
+    payload = {
+        "session_id": soul.runtime.session.id,
+        "content": content,
+        "version": VERSION,
+        "os": f"{platform.system()} {platform.release()}",
+        "model": current_model_key(soul),
+    }
+
+    with console.status("[cyan]Submitting feedback...[/cyan]"):
+        try:
+            async with (
+                new_client_session() as session,
+                session.post(
+                    feedback_url,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        **(provider.custom_headers or {}),
+                    },
+                    raise_for_status=True,
+                ),
+            ):
+                pass
+            session_id = soul.runtime.session.id
+            console.print(
+                f"[green]Feedback submitted, thank you! Your session ID is: {session_id}[/green]"
+            )
+        except TimeoutError:
+            console.print("[red]Feedback submission timed out.[/red]")
+            _fallback_to_issues()
+        except aiohttp.ClientError as e:
+            status = getattr(e, "status", None)
+            if status:
+                msg = f"Failed to submit feedback (HTTP {status})."
+            else:
+                msg = "Network error, failed to submit feedback."
+            console.print(f"[red]{msg}[/red]")
+            _fallback_to_issues()
 
 
 @registry.command(aliases=["reset"])
@@ -471,6 +556,70 @@ async def list_sessions(app: Shell, args: str):
     raise Reload(session_id=selection)
 
 
+@registry.command(name="task")
+@shell_mode_registry.command(name="task")
+async def task(app: Shell, args: str):
+    """Browse and manage background tasks"""
+    soul = ensure_kimi_soul(app)
+    if soul is None:
+        return
+    if args.strip():
+        console.print('[yellow]Usage: "/task" opens the interactive task browser.[/yellow]')
+        return
+    if soul.runtime.role != "root":
+        console.print("[yellow]Background tasks are only available from the root agent.[/yellow]")
+        return
+
+    await TaskBrowserApp(soul).run()
+
+
+@registry.command
+@shell_mode_registry.command
+def theme(app: Shell, args: str):
+    """Switch terminal color theme (dark/light)"""
+    from kimi_cli.ui.theme import get_active_theme
+
+    soul = ensure_kimi_soul(app)
+    if soul is None:
+        return
+
+    current = get_active_theme()
+    arg = args.strip().lower()
+
+    if not arg:
+        console.print(f"Current theme: [bold]{current}[/bold]")
+        console.print("[grey50]Usage: /theme dark | /theme light[/grey50]")
+        return
+
+    if arg not in ("dark", "light"):
+        console.print(f"[red]Unknown theme: {arg}. Use 'dark' or 'light'.[/red]")
+        return
+
+    if arg == current:
+        console.print(f"[yellow]Already using {arg} theme.[/yellow]")
+        return
+
+    config_file = soul.runtime.config.source_file
+    if config_file is None:
+        console.print(
+            "[yellow]Theme switching requires a config file; "
+            "restart without --config to persist this setting.[/yellow]"
+        )
+        return
+
+    # Persist to disk first — only update in-memory state after success
+    try:
+        config_for_save = load_config(config_file)
+        config_for_save.theme = arg  # type: ignore[assignment]
+        save_config(config_for_save, config_file)
+    except (ConfigError, OSError) as exc:
+        console.print(f"[red]Failed to save config: {exc}[/red]")
+        return
+
+    console.print(f"[green]Switched to {arg} theme. Reloading...[/green]")
+    raise Reload(session_id=soul.runtime.session.id)
+
+
 @registry.command
 def web(app: Shell, args: str):
     """Open Kimi Code Web UI in browser"""
@@ -480,62 +629,81 @@ def web(app: Shell, args: str):
 
 
 @registry.command
+def vis(app: Shell, args: str):
+    """Open Kimi Agent Tracing Visualizer in browser"""
+    soul = ensure_kimi_soul(app)
+    session_id = soul.runtime.session.id if soul else None
+    raise SwitchToVis(session_id=session_id)
+
+
+@registry.command
 async def mcp(app: Shell, args: str):
     """Show MCP servers and tools"""
-    from rich.console import Group, RenderableType
-    from rich.text import Text
-
-    from kimi_cli.soul.toolset import KimiToolset
-    from kimi_cli.utils.rich.columns import BulletColumns
+    from rich.live import Live
 
     soul = ensure_kimi_soul(app)
     if soul is None:
         return
-    toolset = soul.agent.toolset
-    if not isinstance(toolset, KimiToolset):
-        console.print("[red]KimiToolset required[/red]")
-        return
-
-    servers = toolset.mcp_servers
-
-    if not servers:
+    await soul.start_background_mcp_loading()
+    snapshot = soul.status.mcp_status
+    if snapshot is None:
         console.print("[yellow]No MCP servers configured.[/yellow]")
         return
 
-    n_conn = sum(1 for s in servers.values() if s.status == "connected")
-    n_tools = sum(len(s.tools) for s in servers.values())
-    console.print(
-        BulletColumns(
-            Text.from_markup(
-                f"[bold]MCP Servers:[/bold] {n_conn}/{len(servers)} connected, {n_tools} tools"
-            )
+    if not snapshot.loading:
+        console.print(render_mcp_console(snapshot))
+        return
+
+    with Live(
+        render_mcp_console(snapshot),
+        console=console,
+        refresh_per_second=8,
+        transient=False,
+    ) as live:
+        while True:
+            snapshot = soul.status.mcp_status
+            if snapshot is None:
+                break
+            live.update(render_mcp_console(snapshot), refresh=True)
+            if not snapshot.loading:
+                break
+            await asyncio.sleep(0.125)
+        try:
+            await soul.wait_for_background_mcp_loading()
+        except Exception as e:
+            logger.debug("MCP loading completed with error while rendering /mcp: {error}", error=e)
+        snapshot = soul.status.mcp_status
+        if snapshot is not None:
+            live.update(render_mcp_console(snapshot), refresh=True)
+
+
+@registry.command
+@shell_mode_registry.command
+def hooks(app: Shell, args: str):
+    """List configured hooks"""
+    soul = ensure_kimi_soul(app)
+    if soul is None:
+        return
+
+    engine = soul.hook_engine
+    if not engine.summary:
+        console.print(
+            "[yellow]No hooks configured. "
+            "Add [[hooks]] sections to your config.toml to set up hooks.[/yellow]"
         )
-    )
+        return
 
-    status_colors = {
-        "connected": "green",
-        "connecting": "cyan",
-        "pending": "yellow",
-        "failed": "red",
-        "unauthorized": "red",
-    }
-    for name, info in servers.items():
-        color = status_colors.get(info.status, "red")
-        server_text = f"[{color}]{name}[/{color}]"
-        if info.status == "unauthorized":
-            server_text += " [grey50](unauthorized - run: kimi mcp auth {name})[/grey50]"
-        elif info.status != "connected":
-            server_text += f" [grey50]({info.status})[/grey50]"
+    console.print()
+    console.print("[bold]Configured Hooks:[/bold]")
+    console.print()
 
-        lines: list[RenderableType] = [Text.from_markup(server_text)]
-        for tool in info.tools:
-            lines.append(
-                BulletColumns(
-                    Text.from_markup(f"[grey50]{tool.name}[/grey50]"),
-                    bullet_style="grey50",
-                )
-            )
-        console.print(BulletColumns(Group(*lines), bullet_style=color))
+    for event, entries in engine.details().items():
+        console.print(f"  [cyan]{event}[/cyan]: {len(entries)} hook(s)")
+        for entry in entries:
+            source_tag = f" [dim]({entry['source']})[/dim]" if entry["source"] == "wire" else ""
+            console.print(f"    [dim]{entry['matcher']}[/dim] {entry['command']}{source_tag}")
+
+    console.print()
 
 
 from . import (  # noqa: E402

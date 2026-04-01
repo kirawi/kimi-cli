@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -21,7 +21,20 @@ from kosong.chat_provider import (
 from kosong.message import Message
 from tenacity import RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential_jitter
 
+from kimi_cli.approval_runtime import (
+    ApprovalSource,
+    get_current_approval_source_or_none,
+    reset_current_approval_source,
+    set_current_approval_source,
+)
+from kimi_cli.background import build_active_task_snapshot
+from kimi_cli.hooks.engine import HookEngine
 from kimi_cli.llm import ModelCapability
+from kimi_cli.notifications import (
+    NotificationView,
+    build_notification_message,
+    extract_notification_ids,
+)
 from kimi_cli.skill import Skill, read_skill_text
 from kimi_cli.skill.flow import Flow, FlowEdge, FlowNode, parse_choice
 from kimi_cli.soul import (
@@ -33,7 +46,12 @@ from kimi_cli.soul import (
     wire_send,
 )
 from kimi_cli.soul.agent import Agent, Runtime
-from kimi_cli.soul.compaction import CompactionResult, SimpleCompaction, should_auto_compact
+from kimi_cli.soul.compaction import (
+    CompactionResult,
+    SimpleCompaction,
+    estimate_text_tokens,
+    should_auto_compact,
+)
 from kimi_cli.soul.context import Context
 from kimi_cli.soul.dynamic_injection import (
     DynamicInjection,
@@ -41,6 +59,7 @@ from kimi_cli.soul.dynamic_injection import (
     normalize_history,
 )
 from kimi_cli.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
+from kimi_cli.soul.dynamic_injections.yolo_mode import YoloModeInjectionProvider
 from kimi_cli.soul.message import check_message, system, system_reminder, tool_result_to_message
 from kimi_cli.soul.slash import registry as soul_slash_registry
 from kimi_cli.soul.toolset import KimiToolset
@@ -50,8 +69,6 @@ from kimi_cli.utils.logging import logger
 from kimi_cli.utils.slashcmd import SlashCommand, parse_slash_command_call
 from kimi_cli.wire.file import WireFile
 from kimi_cli.wire.types import (
-    ApprovalRequest,
-    ApprovalResponse,
     CompactionBegin,
     CompactionEnd,
     ContentPart,
@@ -130,13 +147,23 @@ class KimiSoul:
 
         self._steer_queue: asyncio.Queue[str | list[ContentPart]] = asyncio.Queue()
         self._plan_mode: bool = self._runtime.session.state.plan_mode
-        self._plan_session_id: str | None = None
+        self._plan_session_id: str | None = self._runtime.session.state.plan_session_id
+        # Pre-warm slug cache so the persisted slug survives process restarts
+        if self._plan_session_id is not None and self._runtime.session.state.plan_slug is not None:
+            from kimi_cli.tools.plan.heroes import seed_slug_cache
+
+            seed_slug_cache(self._plan_session_id, self._runtime.session.state.plan_slug)
         self._pending_plan_activation_injection: bool = False
         if self._plan_mode:
             self._ensure_plan_session_id()
         self._injection_providers: list[DynamicInjectionProvider] = [
             PlanModeInjectionProvider(),
+            YoloModeInjectionProvider(),
         ]
+        self._hook_engine: HookEngine = HookEngine()
+        self._stop_hook_active: bool = False
+        if self._runtime.role == "root":
+            self._runtime.notifications.ack_ids("llm", extract_notification_ids(context.history))
 
         # Bind plan mode state to tools that support it
         self._bind_plan_mode_tools()
@@ -159,9 +186,23 @@ class KimiSoul:
         return self._runtime.llm.capabilities
 
     @property
+    def is_yolo(self) -> bool:
+        """Whether yolo (auto-approve / non-interactive) mode is enabled."""
+        return self._approval.is_yolo()
+
+    @property
     def plan_mode(self) -> bool:
         """Whether plan mode (read-only research and planning) is active."""
         return self._plan_mode
+
+    @property
+    def hook_engine(self) -> HookEngine:
+        return self._hook_engine
+
+    def set_hook_engine(self, engine: HookEngine) -> None:
+        self._hook_engine = engine
+        if isinstance(self._agent.toolset, KimiToolset):
+            self._agent.toolset.set_hook_engine(engine)
 
     def add_injection_provider(self, provider: DynamicInjectionProvider) -> None:
         """Register an additional dynamic injection provider."""
@@ -200,30 +241,32 @@ class KimiSoul:
         if isinstance(write_tool, WriteFile):
             write_tool.bind_plan_mode(checker, path_getter)
 
+        from kimi_cli.tools.file.replace import StrReplaceFile
+
+        replace_tool = self._agent.toolset.find("StrReplaceFile")
+        if isinstance(replace_tool, StrReplaceFile):
+            replace_tool.bind_plan_mode(checker, path_getter)
+
         # ExitPlanMode has a special bind() method
         from kimi_cli.tools.plan import ExitPlanMode
 
         exit_tool = self._agent.toolset.find("ExitPlanMode")
         if isinstance(exit_tool, ExitPlanMode):
-            exit_tool.bind(self.toggle_plan_mode, path_getter, checker)
+            exit_tool.bind(self.toggle_plan_mode, path_getter, checker, self._approval.is_yolo)
 
-        # EnterPlanMode has a special bind() with yolo_checker
+        # EnterPlanMode has a special bind() method
         from kimi_cli.tools.plan.enter import EnterPlanMode
 
         enter_tool = self._agent.toolset.find("EnterPlanMode")
         if isinstance(enter_tool, EnterPlanMode):
+            enter_tool.bind(self.toggle_plan_mode, path_getter, checker, self._approval.is_yolo)
 
-            def yolo_checker() -> bool:
-                return self._approval.is_yolo()
-
-            enter_tool.bind(self.toggle_plan_mode, path_getter, checker, yolo_checker)
-
-        # AskUserQuestion gets plan mode checker for dynamic description
+        # AskUserQuestion — bind yolo checker for auto-dismiss
         from kimi_cli.tools.ask_user import AskUserQuestion
 
         ask_tool = self._agent.toolset.find("AskUserQuestion")
         if isinstance(ask_tool, AskUserQuestion):
-            ask_tool.bind_plan_mode(checker)
+            ask_tool.bind_approval(self._approval.is_yolo)
 
     def _ensure_plan_session_id(self) -> None:
         """Allocate a stable plan session ID on first activation."""
@@ -231,6 +274,13 @@ class KimiSoul:
             import uuid
 
             self._plan_session_id = uuid.uuid4().hex
+            self._runtime.session.state.plan_session_id = self._plan_session_id
+            # Compute and persist slug immediately so the path survives process restarts
+            from kimi_cli.tools.plan.heroes import get_or_create_slug
+
+            slug = get_or_create_slug(self._plan_session_id)
+            self._runtime.session.state.plan_slug = slug
+            self._runtime.session.save_state()
 
     def _set_plan_mode(self, enabled: bool, *, source: Literal["manual", "tool"]) -> bool:
         """Update plan mode state for either manual or tool-driven toggles."""
@@ -242,6 +292,9 @@ class KimiSoul:
             self._pending_plan_activation_injection = source == "manual"
         else:
             self._pending_plan_activation_injection = False
+            self._plan_session_id = None
+            self._runtime.session.state.plan_session_id = None
+            self._runtime.session.state.plan_slug = None
         # Persist plan mode to session state so it survives process restarts
         self._runtime.session.state.plan_mode = self._plan_mode
         self._runtime.session.save_state()
@@ -316,6 +369,7 @@ class KimiSoul:
             plan_mode=self._plan_mode,
             context_tokens=token_count,
             max_context_tokens=max_size,
+            mcp_status=self._mcp_status_snapshot(),
         )
 
     @property
@@ -339,6 +393,23 @@ class KimiSoul:
     @property
     def wire_file(self) -> WireFile:
         return self._runtime.session.wire_file
+
+    def _mcp_status_snapshot(self):
+        if not isinstance(self._agent.toolset, KimiToolset):
+            return None
+        return self._agent.toolset.mcp_status_snapshot()
+
+    async def start_background_mcp_loading(self) -> bool:
+        """Start deferred MCP loading, if any, without exposing toolset internals."""
+        if not isinstance(self._agent.toolset, KimiToolset):
+            return False
+        return await self._agent.toolset.start_deferred_mcp_tool_loading()
+
+    async def wait_for_background_mcp_loading(self) -> None:
+        """Wait for any in-flight MCP startup to finish."""
+        if not isinstance(self._agent.toolset, KimiToolset):
+            return
+        await self._agent.toolset.wait_for_mcp_tools()
 
     async def _checkpoint(self):
         await self._context.checkpoint(self._checkpoint_with_user_message)
@@ -378,32 +449,85 @@ class KimiSoul:
         return self._slash_commands
 
     async def run(self, user_input: str | list[ContentPart]):
-        # Refresh OAuth tokens on each turn to avoid idle-time expirations.
-        await self._runtime.oauth.ensure_fresh(self._runtime)
-
-        wire_send(TurnBegin(user_input=user_input))
-        user_message = Message(role="user", content=user_input)
-        text_input = user_message.extract_text(" ").strip()
-
-        if command_call := parse_slash_command_call(text_input):
-            command = self._find_slash_command(command_call.name)
-            if command is None:
-                # this should not happen actually, the shell should have filtered it out
-                wire_send(TextPart(text=f'Unknown slash command "/{command_call.name}".'))
-            else:
-                ret = command.func(self, command_call.args)
-                if isinstance(ret, Awaitable):
-                    await ret
-        elif self._loop_control.max_ralph_iterations != 0:
-            runner = FlowRunner.ralph_loop(
-                user_message,
-                self._loop_control.max_ralph_iterations,
+        approval_source_token = None
+        if get_current_approval_source_or_none() is None:
+            approval_source_token = set_current_approval_source(
+                ApprovalSource(kind="foreground_turn", id=uuid.uuid4().hex)
             )
-            await runner.run(self, "")
-        else:
-            await self._turn(user_message)
+        try:
+            # Refresh OAuth tokens on each turn to avoid idle-time expirations.
+            await self._runtime.oauth.ensure_fresh(self._runtime)
 
-        wire_send(TurnEnd())
+            # Set session_id ContextVar for toolset hooks
+            from kimi_cli.soul.toolset import set_session_id
+
+            set_session_id(self._runtime.session.id)
+
+            # --- UserPromptSubmit hook ---
+            text_input_for_hook = user_input if isinstance(user_input, str) else ""
+            from kimi_cli.hooks import events
+
+            hook_results = await self._hook_engine.trigger(
+                "UserPromptSubmit",
+                matcher_value=text_input_for_hook,
+                input_data=events.user_prompt_submit(
+                    session_id=self._runtime.session.id,
+                    cwd=str(Path.cwd()),
+                    prompt=text_input_for_hook,
+                ),
+            )
+            for result in hook_results:
+                if result.action == "block":
+                    wire_send(TurnBegin(user_input=user_input))
+                    wire_send(TextPart(text=result.reason or "Prompt blocked by hook."))
+                    wire_send(TurnEnd())
+                    return
+
+            wire_send(TurnBegin(user_input=user_input))
+            user_message = Message(role="user", content=user_input)
+            text_input = user_message.extract_text(" ").strip()
+
+            if command_call := parse_slash_command_call(text_input):
+                command = self._find_slash_command(command_call.name)
+                if command is None:
+                    # this should not happen actually, the shell should have filtered it out
+                    wire_send(TextPart(text=f'Unknown slash command "/{command_call.name}".'))
+                else:
+                    ret = command.func(self, command_call.args)
+                    if isinstance(ret, Awaitable):
+                        await ret
+            elif self._loop_control.max_ralph_iterations != 0:
+                runner = FlowRunner.ralph_loop(
+                    user_message,
+                    self._loop_control.max_ralph_iterations,
+                )
+                await runner.run(self, "")
+            else:
+                await self._turn(user_message)
+
+            # --- Stop hook (max 1 re-trigger to prevent infinite loop) ---
+            if not self._stop_hook_active:
+                stop_results = await self._hook_engine.trigger(
+                    "Stop",
+                    input_data=events.stop(
+                        session_id=self._runtime.session.id,
+                        cwd=str(Path.cwd()),
+                        stop_hook_active=False,
+                    ),
+                )
+                for result in stop_results:
+                    if result.action == "block" and result.reason:
+                        self._stop_hook_active = True
+                        try:
+                            await self._turn(Message(role="user", content=result.reason))
+                        finally:
+                            self._stop_hook_active = False
+                        break
+
+            wire_send(TurnEnd())
+        finally:
+            if approval_source_token is not None:
+                reset_current_approval_source(approval_source_token)
 
     async def _turn(self, user_message: Message) -> TurnOutcome:
         if self._runtime.llm is None:
@@ -506,35 +630,17 @@ class KimiSoul:
             self._steer_queue.get_nowait()
 
         if isinstance(self._agent.toolset, KimiToolset):
-            loading = self._agent.toolset.has_pending_mcp_tools()
+            await self.start_background_mcp_loading()
+            loading = bool((snapshot := self._mcp_status_snapshot()) and snapshot.loading)
             if loading:
+                wire_send(StatusUpdate(mcp_status=snapshot))
                 wire_send(MCPLoadingBegin())
             try:
-                await self._agent.toolset.wait_for_mcp_tools()
+                await self.wait_for_background_mcp_loading()
             finally:
                 if loading:
+                    wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
                     wire_send(MCPLoadingEnd())
-
-        async def _pipe_approval_to_wire():
-            while True:
-                request = await self._approval.fetch_request()
-                # Here we decouple the wire approval request and the soul approval request.
-                wire_request = ApprovalRequest(
-                    id=request.id,
-                    action=request.action,
-                    description=request.description,
-                    sender=request.sender,
-                    tool_call_id=request.tool_call_id,
-                    display=request.display,
-                )
-                wire_send(wire_request)
-                # We wait for the request to be resolved over the wire, which means that,
-                # for each soul, we will have only one approval request waiting on the wire
-                # at a time. However, be aware that subagents (which have their own souls) may
-                # also send approval requests to the root wire.
-                resp = await wire_request.wait()
-                self._approval.resolve_request(request.id, resp)
-                wire_send(ApprovalResponse(request_id=request.id, response=resp))
 
         step_no = 0
         while True:
@@ -543,13 +649,12 @@ class KimiSoul:
                 raise MaxStepsReached(self._loop_control.max_steps_per_turn)
 
             wire_send(StepBegin(n=step_no))
-            approval_task = asyncio.create_task(_pipe_approval_to_wire())
             back_to_the_future: BackToTheFuture | None = None
             step_outcome: StepOutcome | None = None
             try:
                 # compact the context if needed
                 if should_auto_compact(
-                    self._context.token_count,
+                    self._context.token_count_with_pending,
                     self._runtime.llm.max_context_size,
                     trigger_ratio=self._loop_control.compaction_trigger_ratio,
                     reserved_context_size=self._loop_control.reserved_context_size,
@@ -563,18 +668,27 @@ class KimiSoul:
                 step_outcome = await self._step()
             except BackToTheFuture as e:
                 back_to_the_future = e
-            except Exception:
+            except Exception as e:
                 # any other exception should interrupt the step
                 wire_send(StepInterrupted())
+                # --- StopFailure hook ---
+                from kimi_cli.hooks import events as _hook_events
+
+                _hook_task = asyncio.create_task(
+                    self._hook_engine.trigger(
+                        "StopFailure",
+                        matcher_value=type(e).__name__,
+                        input_data=_hook_events.stop_failure(
+                            session_id=self._runtime.session.id,
+                            cwd=str(Path.cwd()),
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                        ),
+                    )
+                )
+                _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
                 # break the agent loop
                 raise
-            finally:
-                approval_task.cancel()  # stop piping approval requests to the wire
-                with suppress(asyncio.CancelledError):
-                    try:
-                        await approval_task
-                    except Exception:
-                        logger.exception("Approval piping task failed")
 
             if step_outcome is not None:
                 has_steers = await self._consume_pending_steers()
@@ -604,6 +718,37 @@ class KimiSoul:
         # already checked in `run`
         assert self._runtime.llm is not None
         chat_provider = self._runtime.llm.chat_provider
+
+        if self._runtime.role == "root":
+
+            async def _append_notification(view: NotificationView) -> None:
+                await self._context.append_message(build_notification_message(view, self._runtime))
+                # --- Notification hook ---
+                from kimi_cli.hooks import events
+
+                _hook_task = asyncio.create_task(
+                    self._hook_engine.trigger(
+                        "Notification",
+                        matcher_value=view.event.type,
+                        input_data=events.notification(
+                            session_id=self._runtime.session.id,
+                            cwd=str(Path.cwd()),
+                            sink="llm",
+                            notification_type=view.event.type,
+                            title=view.event.title,
+                            body=view.event.body,
+                            severity=view.event.severity,
+                        ),
+                    )
+                )
+                _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+            await self._runtime.notifications.deliver_pending(
+                "llm",
+                limit=4,
+                before_claim=self._runtime.background_tasks.reconcile,
+                on_notification=_append_notification,
+            )
 
         # Dynamic injection
         injections = await self._collect_injections()
@@ -671,8 +816,19 @@ class KimiSoul:
         # shield the context manipulation from interruption
         await asyncio.shield(self._grow_context(result, results))
 
-        rejected = any(isinstance(result.return_value, ToolRejectedError) for result in results)
-        if rejected:
+        rejected_errors = [
+            result.return_value
+            for result in results
+            if isinstance(result.return_value, ToolRejectedError)
+        ]
+        if (
+            rejected_errors
+            and not any(e.has_feedback for e in rejected_errors)
+            and self._runtime.role != "subagent"
+        ):
+            # Pure rejection (no user feedback) — stop the turn.
+            # Subagents skip this so the LLM can see the rejection and try
+            # an alternative approach instead of terminating immediately.
             _ = self._denwa_renji.fetch_pending_dmail()
             return StepOutcome(stop_reason="tool_rejected", assistant_message=result.message)
 
@@ -761,17 +917,62 @@ class KimiSoul:
                 chat_provider=chat_provider,
             )
 
+        trigger_reason = "manual" if custom_instruction else "auto"
+        from kimi_cli.hooks import events
+
+        await self._hook_engine.trigger(
+            "PreCompact",
+            matcher_value=trigger_reason,
+            input_data=events.pre_compact(
+                session_id=self._runtime.session.id,
+                cwd=str(Path.cwd()),
+                trigger=trigger_reason,
+                token_count=self._context.token_count,
+            ),
+        )
+
         wire_send(CompactionBegin())
         compaction_result = await _compact_with_retry()
         await self._context.clear()
         await self._context.write_system_prompt(self._agent.system_prompt)
         await self._checkpoint()
         await self._context.append_message(compaction_result.messages)
+        estimated_token_count = compaction_result.estimated_token_count
+
+        if self._runtime.role == "root":
+            active_task_snapshot = build_active_task_snapshot(self._runtime.background_tasks)
+            if active_task_snapshot is not None:
+                active_task_message = Message(
+                    role="user",
+                    content=[
+                        system(
+                            "The following background tasks are still active after compaction. "
+                            "Use TaskList if you need to re-enumerate them later."
+                        ),
+                        TextPart(text=active_task_snapshot),
+                    ],
+                )
+                await self._context.append_message(active_task_message)
+                estimated_token_count += estimate_text_tokens([active_task_message])
 
         # Estimate token count so context_usage is not reported as 0%
-        await self._context.update_token_count(compaction_result.estimated_token_count)
+        await self._context.update_token_count(estimated_token_count)
 
         wire_send(CompactionEnd())
+
+        _hook_task = asyncio.create_task(
+            self._hook_engine.trigger(
+                "PostCompact",
+                matcher_value=trigger_reason,
+                input_data=events.post_compact(
+                    session_id=self._runtime.session.id,
+                    cwd=str(Path.cwd()),
+                    trigger=trigger_reason,
+                    estimated_token_count=estimated_token_count,
+                ),
+            )
+        )
+        _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     @staticmethod
     def _is_retryable_error(exception: BaseException) -> bool:
@@ -784,6 +985,7 @@ class KimiSoul:
             500,  # Internal Server Error
             502,  # Bad Gateway
             503,  # Service Unavailable
+            504,  # Gateway Timeout
         )
 
     async def _run_with_connection_recovery(

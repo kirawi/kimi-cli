@@ -22,9 +22,10 @@ from kosong.tooling import (
     UnknownDisplayBlock,
 )
 from kosong.utils.typing import JsonType
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 from kimi_cli.tools.display import (
+    BackgroundTaskDisplayBlock,
     DiffDisplayBlock,
     ShellDisplayBlock,
     TodoDisplayBlock,
@@ -98,6 +99,33 @@ class CompactionEnd(BaseModel):
     pass
 
 
+class HookTriggered(BaseModel):
+    """A batch of hooks has been triggered and is now executing."""
+
+    event: str
+    """The hook event type, e.g. 'PreToolUse', 'Stop'."""
+    target: str = ""
+    """What the hooks are targeting: tool name for tool hooks,
+    agent name for subagent hooks, etc."""
+    hook_count: int = 1
+    """Number of matched hooks running in parallel."""
+
+
+class HookResolved(BaseModel):
+    """A batch of hooks has finished executing."""
+
+    event: str
+    """The hook event type, e.g. 'PreToolUse', 'Stop'."""
+    target: str = ""
+    """Same as HookTriggered.target."""
+    action: Literal["allow", "block"] = "allow"
+    """Aggregate decision: 'block' if any hook blocked, 'allow' otherwise."""
+    reason: str = ""
+    """Reason for blocking. Empty if allowed."""
+    duration_ms: int = 0
+    """Wall-clock time for the entire batch, in milliseconds."""
+
+
 class MCPLoadingBegin(BaseModel):
     """Indicates that MCP tool loading is in progress."""
 
@@ -108,6 +136,24 @@ class MCPLoadingEnd(BaseModel):
     """Indicates that MCP tool loading has finished."""
 
     pass
+
+
+class MCPServerSnapshot(BaseModel):
+    """A snapshot of one MCP server during startup."""
+
+    name: str
+    status: Literal["pending", "connecting", "connected", "failed", "unauthorized"]
+    tools: tuple[str, ...] = ()
+
+
+class MCPStatusSnapshot(BaseModel):
+    """A snapshot of MCP startup progress."""
+
+    loading: bool
+    connected: int
+    total: int
+    tools: int
+    servers: tuple[MCPServerSnapshot, ...] = ()
 
 
 class StatusUpdate(BaseModel):
@@ -128,6 +174,32 @@ class StatusUpdate(BaseModel):
     """The message ID of the current step."""
     plan_mode: bool | None = None
     """Whether plan mode (read-only) is active. None means no change."""
+    mcp_status: MCPStatusSnapshot | None = None
+    """The current MCP startup snapshot. None means no change."""
+
+
+class Notification(BaseModel):
+    """A generic system notification for UI and client consumption."""
+
+    id: str
+    category: str
+    type: str
+    source_kind: str
+    source_id: str
+    title: str
+    body: str
+    severity: str
+    created_at: float
+    payload: dict[str, JsonType] = Field(default_factory=dict)
+
+
+class PlanDisplay(BaseModel):
+    """Displays a plan's content inline in the chat with special formatting."""
+
+    content: str
+    """The full markdown content of the plan."""
+    file_path: str
+    """The path to the plan file for reference."""
 
 
 class SubagentEvent(BaseModel):
@@ -135,11 +207,25 @@ class SubagentEvent(BaseModel):
     An event from a subagent.
     """
 
-    task_tool_call_id: str
-    """The ID of the task tool call associated with this subagent."""
+    parent_tool_call_id: str | None = None
+    """The ID of the parent Agent tool call associated with this subagent."""
+    agent_id: str | None = None
+    """The subagent instance ID."""
+    subagent_type: str | None = None
+    """The built-in subagent type used by this instance."""
     event: Event
     """The event from the subagent."""
     # TODO: maybe restrict the event types? to exclude approval request, etc.
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(cast(dict[str, Any], value))
+        if "parent_tool_call_id" not in data and "task_tool_call_id" in data:
+            data["parent_tool_call_id"] = data["task_tool_call_id"]
+        return data
 
     @field_serializer("event", when_used="json")
     def _serialize_event(self, event: Event) -> dict[str, Any]:
@@ -178,6 +264,8 @@ class ApprovalResponse(BaseModel):
     """The ID of the resolved approval request."""
     response: Kind
     """The response to the approval request."""
+    feedback: str = ""
+    """Optional user feedback when rejecting (e.g. instructions for the model)."""
 
 
 class ApprovalRequest(BaseModel):
@@ -190,6 +278,11 @@ class ApprovalRequest(BaseModel):
     sender: str
     action: str
     description: str
+    source_kind: Literal["foreground_turn", "background_agent"] | None = None
+    source_id: str | None = None
+    agent_id: str | None = None
+    subagent_type: str | None = None
+    source_description: str | None = None
     display: list[DisplayBlock] = Field(default_factory=list[DisplayBlock])
     """Defaults to an empty list for backwards-compatible wire.jsonl loading."""
 
@@ -200,6 +293,7 @@ class ApprovalRequest(BaseModel):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._future: asyncio.Future[ApprovalResponse.Kind] | None = None
+        self._feedback: str = ""
 
     def _get_future(self) -> asyncio.Future[ApprovalResponse.Kind]:
         if self._future is None:
@@ -215,14 +309,20 @@ class ApprovalRequest(BaseModel):
         """
         return await self._get_future()
 
-    def resolve(self, response: ApprovalResponse.Kind) -> None:
+    def resolve(self, response: ApprovalResponse.Kind, feedback: str = "") -> None:
         """
         Resolve the approval request with the given response.
         This will cause the `wait()` method to return the response.
         """
+        self._feedback = feedback
         future = self._get_future()
         if not future.done():
             future.set_result(response)
+
+    @property
+    def feedback(self) -> str:
+        """User feedback text provided with a rejection, if any."""
+        return self._feedback
 
     @property
     def resolved(self) -> bool:
@@ -382,22 +482,82 @@ type Event = (
     | TurnEnd
     | StepBegin
     | StepInterrupted
+    | HookTriggered
+    | HookResolved
     | CompactionBegin
     | CompactionEnd
     | MCPLoadingBegin
     | MCPLoadingEnd
     | StatusUpdate
+    | Notification
     | ContentPart
     | ToolCall
     | ToolCallPart
     | ToolResult
     | ApprovalResponse
     | SubagentEvent
+    | PlanDisplay
 )
 """Any event, including control flow and content/tooling events."""
 
 
-type Request = ApprovalRequest | ToolCallRequest | QuestionRequest
+class HookResponse(BaseModel):
+    """
+    Client response to a HookRequest.
+    """
+
+    request_id: str
+    """The ID of the HookRequest being responded to."""
+    action: Literal["allow", "block"] = "allow"
+    """The decision: allow the action or block it."""
+    reason: str = ""
+    """Reason for blocking. Empty if allowed."""
+
+
+class HookRequest(BaseModel):
+    """
+    A request for the wire client to handle a hook event.
+    The client runs its own logic and responds with allow/block.
+    """
+
+    type Action = Literal["allow", "block"]
+
+    id: str
+    """Unique request ID."""
+    subscription_id: str = ""
+    """Which subscription triggered this request."""
+    event: str
+    """The hook event type, e.g. 'PreToolUse', 'Stop'."""
+    target: str = ""
+    """What triggered the hook: tool name, agent name, etc."""
+    input_data: dict[str, Any] = Field(default_factory=dict)
+    """Full event payload (same as what shell hooks get on stdin)."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._future: asyncio.Future[tuple[HookRequest.Action, str]] | None = None
+
+    def _get_future(self) -> asyncio.Future[tuple[HookRequest.Action, str]]:
+        if self._future is None:
+            self._future = asyncio.get_event_loop().create_future()
+        return self._future
+
+    async def wait(self) -> tuple[Action, str]:
+        """Wait for client response. Returns (action, reason)."""
+        return await self._get_future()
+
+    def resolve(self, action: Action, reason: str = "") -> None:
+        """Resolve with client's decision."""
+        future = self._get_future()
+        if not future.done():
+            future.set_result((action, reason))
+
+    @property
+    def resolved(self) -> bool:
+        return self._future is not None and self._future.done()
+
+
+type Request = ApprovalRequest | ToolCallRequest | QuestionRequest | HookRequest
 """Any request. Request is a message that expects a response."""
 
 type WireMessage = Event | Request
@@ -473,12 +633,16 @@ __all__ = [
     "MCPLoadingBegin",
     "MCPLoadingEnd",
     "StatusUpdate",
+    "MCPServerSnapshot",
+    "MCPStatusSnapshot",
+    "Notification",
     "ContentPart",
     "ToolCall",
     "ToolCallPart",
     "ToolResult",
     "ApprovalResponse",
     "SubagentEvent",
+    "PlanDisplay",
     "ApprovalRequest",
     "ToolCallRequest",
     "QuestionOption",
@@ -506,4 +670,5 @@ __all__ = [
     "TodoDisplayBlock",
     "TodoDisplayItem",
     "ShellDisplayBlock",
+    "BackgroundTaskDisplayBlock",
 ]

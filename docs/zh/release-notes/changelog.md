@@ -4,6 +4,114 @@
 
 ## 未发布
 
+## 1.28.0 (2026-03-30)
+
+- Core：修复文件写入/替换工具冻结事件循环的问题——diff 计算（`build_diff_blocks`）现在通过 `asyncio.to_thread` 转移到线程中执行，防止编辑大文件时 UI 卡死
+- Shell：修复 `_watch_root_wire_hub` 在处理异常时静默退出的问题——观察者现在会捕获并记录异常（与 `wire/server.py` 中的模式一致），并优雅处理 `QueueShutDown`，防止审批流程在会话中途静默中断
+- Core：对超大文件（>10000 行）跳过 O(n²) diff 计算——超过阈值的文件现在显示摘要块而非计算完整 diff，未变化的文件会立即短路返回
+- Wire：为 `DiffDisplayBlock` 新增 `is_summary` 字段（Wire 1.8）——标记包含行数摘要而非实际 diff 内容的块，便于客户端做差异化渲染
+- Web：渲染大文件 diff 摘要——当 diff 块标记为 `is_summary` 时，Web UI 显示紧凑的"文件过大无法内联 diff"提示及行数，而非尝试计算 diff
+- Auth：修复 OAuth 用户执行 Skill 或空闲后出现 "incorrect API KEY" 的问题——401 错误现在会显示清晰的 "请 /login" 提示，而不是原始的 API 错误信息；ACP 层会正确触发 VS Code 扩展的重新登录流程
+- Web：修复 OAuth 用户的会话标题生成始终失败的问题——标题生成器现在会使用 OAuth 令牌，并在调用模型前刷新过期令牌
+- Core：为 Agent 工具和 HTTP 请求添加超时保护——所有 `aiohttp` 会话现在默认 120 秒总超时 / 60 秒读取超时；Agent 工具新增可选 `timeout` 参数（前台默认 10 分钟，后台默认 15 分钟）；后台 Agent 任务超时后标记为 `timed_out` 并正确触发通知
+- Grep：修复工具卡死且无法中断的问题——将阻塞的 `ripgrepy.run()` 替换为异步子进程执行；工具现在可响应 Ctrl-C 立即中断，并设有 20 秒超时保护，超时后返回部分结果
+- Grep：新增 Token 效率优化——默认 `head_limit` 为 250 并支持 `offset` 分页、启用 `--hidden` 搜索同时排除 VCS 目录、`files_with_matches` 按修改时间排序、输出相对路径、非 content 模式限制最大列宽 500
+- Grep：content 模式的 `line_number`（`-n`）现在默认为 `true`——默认包含行号，以便模型引用精确的代码位置
+- Grep：`count_matches` 模式现在在 message 中包含汇总信息——例如 "Found 30 total occurrences across 10 files."
+- ACP：修复通过 `kimi-code` 或 `kimi-cli` 入口启动 ACP 时 `ValueError: list.index(x): x not in list` 崩溃的问题（如 JetBrains AI Assistant 场景）
+- Core：修复 OpenAI 兼容 API（如 One API）在多轮对话中返回 400 错误的问题——当服务端默认返回 `reasoning_content` 时，现在会在历史消息包含思考内容且配置了 `reasoning_key` 的情况下自动设置 `reasoning_effort` 为 `"medium"`
+- Shell：新增 `/theme` 命令和深色/浅色主题支持——使用浅色终端背景的用户可通过 `/theme light` 或在 `config.toml` 中设置 `theme = "light"` 切换到浅色配色方案；diff 高亮、任务浏览器、提示符 UI 和 MCP 状态颜色均会跟随所选主题自动适配
+- Core：修复压缩前上下文溢出问题——工具结果的 Token 数现在会被估算并纳入自动压缩触发检查，防止大量工具输出在 API 调用间隙将上下文推超模型限制时出现"exceeded model token limit"错误
+- Core：新增 hooks 系统（Beta）——在 `config.toml` 中配置 `[[hooks]]`，可在 13 个生命周期事件（包括 `PreToolUse`、`PostToolUse`、`SessionStart`、`Stop` 等）运行自定义 shell 命令；支持正则匹配、超时处理和通过退出码 2 阻塞操作
+- Shell：新增 `/hooks` 命令——列出所有已配置的 hooks 及其事件计数
+- Wire：新增 `HookTriggered` 和 `HookResolved` 事件类型（Wire 1.7）——在 hooks 开始和完成执行时通知客户端，包含事件类型、目标、操作（允许/阻塞）和耗时
+- Wire：新增 `HookRequest` 和 `HookResponse` 消息类型——允许 Wire 客户端订阅 hook 事件并提供自己的处理逻辑，返回允许或阻塞的决策
+- Shell：修复通知消息泄漏到会话回放和导出中的问题——后台任务通知标签（`<notification>`、`<task-notification>`）在恢复会话（`/sessions`）以及导出（`/export`）或导入（`/import`）对话历史时现在会被正确过滤
+- CLI：`--skills-dir` 现在支持多个目录并覆盖默认发现——指定后，这些目录将替代用户/项目 Skills 发现（可重复的标志）
+- Web：工作区顶部的 "Open" 按钮现在会记住上次使用的应用——点击 "Open" 直接以上次选择的应用打开，点击下拉箭头可重新选择其他应用
+- Web：修复 Archived 会话计数仅显示已加载页面大小的问题——当存在更多 Archived 会话时，计数标签现在显示 "100+"
+- Shell：修复粘贴文本占位符在模态回答中未展开的问题——粘贴到审批面板或问题面板中的剪贴板内容现在会在发送给模型前正确插值
+- Vis：新增 `--network / -n` 启动参数——在所有网络接口上启动可视化工具并自动探测和显示 LAN IP 地址，与 `kimi web` 行为一致
+- Vis：新增 `/vis` 斜杠命令——在交互式 Shell 中一步切换到 Tracing 可视化工具，与现有 `/web` 命令对称
+- Vis：改进会话列表性能——后端异步扫描、请求并发限制、无限滚动分页，防止大量会话时浏览器卡顿
+- Vis：补齐 7 个缺失的 Wire 事件类型——`SteerInput`、`MCPLoadingBegin/End`、`Notification`、`PlanDisplay`、`ToolCallRequest` 和 `QuestionRequest` 现在以正确的颜色和摘要显示
+- Vis：StatusUpdate 显示 Token 和缓存详情——每个状态更新现在显示上下文 Token 数、最大 Token 数、输入 Token 分解及缓存命中率、MCP 连接状态
+- Vis：工具调用显示结构化摘要——`ReadFile`、`Shell`、`Glob`、`Grep`、`Agent` 等工具调用直接在行内显示文件路径、命令或搜索模式，而非仅显示函数名
+- Vis：Context Messages 新增 System Prompt 卡片——`_system_prompt` 条目以专用蓝色卡片渲染，显示估算的 Token 数并支持展开查看完整内容
+- Vis：会话头部显示缓存命中率——统计栏现在在 Token 数旁显示整体缓存效率（如 `89% cache`）
+- Vis：高亮慢操作——时间间隔超过 10 秒以琥珀色显示，超过 60 秒以红色显示，使性能瓶颈一目了然
+- Vis：ToolResult 摘要优先显示人类可读的 `message` 字段——结果现在显示如 "Command executed successfully" 等描述性文本，而非原始输出
+- Vis：显示审批拒绝反馈——`ApprovalResponse` 摘要在工具调用被拒绝时包含用户的修正文本
+
+## 1.27.0 (2026-03-28)
+
+- Shell：新增 `/feedback` 命令——可直接在 CLI 会话中提交反馈，网络错误或超时时自动回退到打开 GitHub Issues 页面
+- Shell：重新设计工具结果中的 diff 渲染——文件 diff 现在显示行号、背景色（绿色/红色）、语法高亮和行内字符级变更标记；审批预览仅显示变更行以提供紧凑视图；Ctrl-E 翻页器使用相同的统一风格
+- Shell：更新语法高亮主题——将原本大量使用品红色的配色方案替换为更均衡的 ANSI 调色板，兼容各种终端；改善色彩多样性和在深色/亮色终端背景下的可读性
+- Shell：修复多个 Subagent 运行时审批面板不可见的问题——审批面板和问题面板现在渲染在 Live 视图顶部，确保即使工具调用输出超出终端高度时仍然可见
+- CLI：修复 `--print` 模式在出错时退出码为 0 的问题——Print 模式现在对永久性错误（认证失败、配置无效等）返回退出码 1，对可重试错误（429 速率限制、5xx 服务端错误、连接超时）返回退出码 75，使 CI/Eval 运行器能够检测失败并决定是否重试
+- Plan：计划内容现在直接显示在聊天记录中，而非隐藏在翻页器后——计划以带边框的面板形式渲染在对话历史中，并展示计划文件路径供参考
+- Plan：Plan 审批新增 "Reject and Exit" 选项——用户现在可以一步拒绝计划并退出 Plan 模式，除现有的 Approve、Revise 和 Reject 选项外
+- Wire：新增 `PlanDisplay` 事件类型（Wire 1.7）——携带计划内容和文件路径，供客户端内联渲染
+- Shell：流式输出 Markdown 内容——已完成的 Markdown 块（段落、列表、代码块、表格）现在会在流式传输过程中即时渲染并输出到终端，而非缓冲到整个轮次结束后才显示
+- Shell：在 Thinking/Composing 加载动画上显示耗时和估算 Token 数——加载动画现在会显示 `Thinking... 5s · 312 tokens`，计数在生成过程中实时更新
+- Shell：为 Thinking 内容添加滚动预览——模型思考过程的最后 6 行会以灰色斜体实时显示在加载动画下方
+- Shell：将输入区域预留空间从 10 行缩减至 6 行
+- Glob：`Glob` 工具现在可以访问 Skills 目录——除工作区外，该工具现在还可以搜索已发现的 Skill 根目录
+- Glob：`Glob` 工具现在在验证目录路径前会展开 `~` 为用户主目录
+
+## 1.26.0 (2026-03-25)
+
+- Kosong：修复 Google GenAI 提供商在 `FunctionCall`/`FunctionResponse` 中包含 `id` 字段的问题——Gemini API 在包含 `id` 时返回 HTTP 400；从 wire 格式中移除该字段，同时保持内部 `tool_call_id` 跟踪不变
+- Core：修复 MCP 服务器 stderr 污染问题——stderr 重定向现在在 MCP 服务器启动前安装，子进程日志（如 `mcp-remote` 的 OAuth 调试输出）将被捕获到日志文件，而非输出到终端
+- Shell：修复子进程遇到交互式提示时挂起的问题——`Shell` 工具现在会立即关闭 stdin 并设置 `GIT_TERMINAL_PROMPT=0`，使需要凭证的命令（如通过 HTTPS 执行 `git push`）快速失败，而非阻塞至超时
+- Core：修复 LLM 工具调用参数包含未转义控制字符时 JSON 解析失败的问题——在所有 LLM 输出解析路径使用 `json.loads(strict=False)`，防止工具执行失败和会话永久损坏
+- Shell：空闲时自动响应后台任务完成——Shell 现在会检测后台 Bash 命令或 Agent 任务的完成，并自动发起新的 Agent 轮次处理结果，无需等待用户输入
+- Core：修复 Print 模式下 `QuestionRequest` 导致挂起的问题——`AskUserQuestion`、`EnterPlanMode` 和 `ExitPlanMode` 在非交互（yolo）模式下自动处理，避免 `--print` 会话中工具调用无限挂起
+- Core：修复后台 Agent 任务运行期间无法查看输出的问题——`/task` 浏览器和 `TaskOutput` 工具现在可实时显示后台 Agent 任务的输出，通过在执行期间同步写入任务日志替代完成后拷贝的方式实现
+- Core：增强系统提示词以鼓励工具调用——Agent 现在默认优先使用工具执行操作，而非将代码作为纯文本输出
+- Core：修复生成过程中遇到 `httpx.ProtocolError` 或 `504 Gateway Timeout` 时不重试的问题——流式协议断连和瞬时 `504` 响应现在会走既有重试路径，而不是在网络不稳定时直接中断当前轮次
+- Kosong：修复 Anthropic 提供商在流式传输期间 `httpx.ReadTimeout` 异常泄漏的问题——异常现在正确转换为 `APITimeoutError`，使此前被绕过的重试逻辑能够正常触发
+
+## 1.25.0 (2026-03-23)
+
+- Core：新增插件系统（Skills + Tools）——插件通过 `plugin.json` 为 Kimi Code CLI 扩展自定义工具；工具是在独立子进程中运行的命令，其 stdout 返回给 Agent；插件支持通过 `inject` 配置自动注入凭证
+- Core：支持多插件仓库——`kimi plugin install` 接受带 subpath 的 Git URL，从 monorepo 中安装特定插件（如 `https://github.com/org/repo.git/plugins/my-plugin`）；当未提供 subpath 且根目录无 `plugin.json` 时，CLI 会列出直接子目录中可用的插件
+- Core：统一插件凭证注入——插件可在 `plugin.json` 中声明 `inject` 字段，从主机的 LLM 提供商配置接收 `api_key` 和 `base_url`；支持 OAuth 托管 token 和静态 API key 两种凭证类型
+- Core：新增 `Agent` 工具支持子 Agent 委派——Agent 现在可以创建持久的子 Agent 实例，内置三种类型（`coder`、`explore`、`plan`）处理聚焦的子任务；每个实例在会话内维护独立的上下文历史，支持前台或后台运行并自动汇总结果
+- Core：统一审批运行时——前台工具调用和后台子 Agent 的审批请求现在通过统一的运行时协调，并由根 UI 通道呈现；拒绝响应可包含反馈文本以指导模型的下一次尝试
+- Shell：新增交互式审批请求面板——内联面板展示工具调用详情（Diff、Shell 命令等），提供批准一次、批准本次会话、拒绝或附带反馈文字拒绝等选项
+- Wire：协议版本升级至 1.6——`SubagentEvent` 新增 `agent_id`、`subagent_type`、`parent_tool_call_id` 字段；`ApprovalRequest` 包含来源元数据（`source_kind`、`source_id`）；`ApprovalResponse` 支持 `feedback` 字段
+- Vis：新增 Agents 面板——`kimi vis` 中新增 "Agents" 标签页，可查看子 Agent 实例及其事件，并按 Agent 范围筛选 Wire 时间线
+- Core：`TaskOutput` 的 `block` 参数默认值从 `true` 改为 `false`——`TaskOutput` 现在默认返回非阻塞的状态/输出快照；仅在需要等待任务完成时设置 `block=true`
+- Shell：在提示工具栏中显示当前工作目录、Git 分支、脏状态以及与远端的 ahead/behind 同步状态
+- Shell：在工具栏中显示活跃后台 Bash 任务数量，按时间轮换快捷键提示，并在窄终端中优雅截断内容以避免溢出
+- Web：修复取消和审批时工具执行状态同步问题——停止生成时工具现在正确过渡到 `output-denied` 状态，审批通过后执行期间显示加载动画（而非勾选图标）
+- Web：会话重放时消除过期的审批和问答对话框——重放会话或后端报告 idle/stopped/error 状态时，所有待处理的审批/问答对话框现在会被正确消除，防止产生孤立的交互元素
+- Web：支持行内数学公式渲染——除块级数学公式（`$$...$$`）外，新增支持单美元符号行内数学公式（`$...$`）
+- Web：优化 Switch 切换开关的比例和对齐——切换轨道现在更大（36×20），拇指按钮保持 16px 并具备更平滑的 16px 位移动画
+- Web：在活动面板中显示子 Agent 类型标签——子 Agent 活动现在显示其类型（如 "Coder agent working"）而非通用的 "Agent" 标签
+- Web：审批对话框新增反馈模式——按 `4` 可附带反馈文字拒绝，指导模型的下一次尝试；来自子 Agent 的审批请求会显示来源标签和预览内容（Diff、命令等）
+- Web：视觉区分子 Agent 来源的工具调用——来自子 Agent 的 Tool 消息以左边框和来源类型标签渲染，便于区分归属
+
+## 1.24.0 (2026-03-18)
+
+- Shell：提高长文本粘贴自动折叠阈值至 1000 字符或 15 行（之前为 300 字符或 3 行），改善语音/无键盘输入等场景下的体验
+- Core：Plan 模式现在支持多选方案——当 Agent 的计划包含多个不同路径时，`ExitPlanMode` 可展示 2–3 个带标签的选项供用户选择执行哪一个方案；用户选择的方案会作为选定路径返回给 Agent
+- Core：跨进程重启持久化 Plan 会话 ID 和文件路径——Plan 会话标识符和文件 slug 保存到 `SessionState`，重启 Kimi Code 后会继续使用 `~/.kimi/plans/` 下的同一计划文件，而非创建新文件
+- Core：Plan 模式现在支持增量编辑计划文件——Agent 可以使用 `StrReplaceFile` 精准更新计划文件的特定部分，而无需通过 `WriteFile` 重写整个文件；同时非计划文件的编辑现在会被直接阻止，而非弹出审批请求
+- Core：延迟 MCP 启动并展示加载进度——MCP 服务器现在在 Shell UI 启动后异步初始化，并提供实时进度指示器显示连接状态；Shell 在状态区域显示连接中和就绪状态，Web 显示服务器连接状态
+- Core：优化轻量级启动路径——对 CLI 子命令和版本元数据实现延迟加载，显著缩短 `--version` 和 `--help` 等常用命令的启动时间
+- Build：修复 Nix `FileCollisionError` for `bin/kimi`——从 `kimi-code` 包中移除重复的入口点，使 `kimi-cli` 独占 `bin/kimi`
+- Shell：Agent 运行期间保留用户未提交的输入——在模型运行时在提示符中键入的文本不再在轮次结束时丢失，用户可以按回车键将草稿作为下一条消息提交
+- Shell：修复 Agent 运行结束后 Ctrl-C 和 Ctrl-D 无法正常工作的问题——键盘中断和 EOF 信号被静默吞没，而非显示提示信息或退出 Shell
+
+## 1.23.0 (2026-03-17)
+
+- Shell：新增后台 Bash——`Shell` 工具现在支持 `run_in_background=true` 参数，可将耗时命令（构建、测试、服务）作为后台任务启动，Agent 无需等待即可继续工作；新增 `TaskList`、`TaskOutput`、`TaskStop` 工具管理任务生命周期，任务到达终止态时系统自动通知 Agent
+- Shell：新增 `/task` 斜杠命令与交互式任务浏览器——三列 TUI 界面，支持查看、监控和管理后台任务，提供实时刷新、输出预览和键盘驱动的任务停止操作
+- Web：修复切换模型后其他标签页全局配置未刷新的问题——在某个标签页中切换模型时，其他标签页现在能检测到配置更新并自动刷新全局配置
+
 ## 1.22.0 (2026-03-13)
 
 - Shell：长文本粘贴自动折叠为 `[Pasted text #n]` 占位符——通过 `Ctrl-V` 或括号粘贴输入的超过 300 字符或 3 行的文本在提示缓冲区中显示为紧凑的占位符标记，完整内容在发送给模型时展开；外部编辑器（`Ctrl-O`）打开时自动展开占位符，保存后重新折叠

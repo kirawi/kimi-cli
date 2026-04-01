@@ -14,7 +14,7 @@ kimi --agent okabe
 
 The default agent, suitable for general use. Enabled tools:
 
-`Task`, `AskUserQuestion`, `SetTodoList`, `Shell`, `ReadFile`, `ReadMediaFile`, `Glob`, `Grep`, `WriteFile`, `StrReplaceFile`, `SearchWeb`, `FetchURL`, `EnterPlanMode`, `ExitPlanMode`
+`Agent`, `AskUserQuestion`, `SetTodoList`, `Shell`, `ReadFile`, `ReadMediaFile`, `Glob`, `Grep`, `WriteFile`, `StrReplaceFile`, `SearchWeb`, `FetchURL`, `EnterPlanMode`, `ExitPlanMode`, `TaskList`, `TaskOutput`, `TaskStop`
 
 ### `okabe`
 
@@ -71,7 +71,7 @@ agent:
 
 ## System prompt built-in parameters
 
-The system prompt file is a Markdown template that can use `${VAR}` syntax to reference variables. Built-in variables include:
+The system prompt file is a Markdown template that can use `${VAR}` syntax to reference variables and supports the Jinja2 `{% include %}` directive to include other files. Built-in variables include:
 
 | Variable | Description |
 |----------|-------------|
@@ -106,7 +106,7 @@ ${MY_VAR}
 
 ## Defining subagents in agent files
 
-Subagents can handle specific types of tasks. After defining subagents in an agent file, the main agent can launch them via the `Task` tool:
+Subagents can handle specific types of tasks. After defining subagents in an agent file, the main agent can launch them via the `Agent` tool:
 
 ```yaml
 version: 1
@@ -114,59 +114,63 @@ agent:
   extend: default
   subagents:
     coder:
-      path: ./coder-sub.yaml
+      path: ./coder.yaml
       description: "Handle coding tasks"
     reviewer:
-      path: ./reviewer-sub.yaml
+      path: ./reviewer.yaml
       description: "Code review expert"
 ```
 
-Subagent files are also standard agent format, typically inheriting from the main agent and excluding certain tools:
+Subagent files are also standard agent format, typically inheriting from the main agent:
 
 ```yaml
-# coder-sub.yaml
+# coder.yaml
 version: 1
 agent:
   extend: ./agent.yaml  # Inherit from main agent
   system_prompt_args:
     ROLE_ADDITIONAL: |
       You are now running as a subagent...
-  exclude_tools:
-    - "kimi_cli.tools.multiagent:Task"  # Exclude Task tool to avoid nesting
 ```
+
+## Built-in subagent types
+
+The default agent configuration includes three built-in subagent types, each with different tool policies and use cases:
+
+| Type | Purpose | Available tools |
+|------|---------|----------------|
+| `coder` | General software engineering: read/write files, run commands, search code | `Shell`, `ReadFile`, `Glob`, `Grep`, `WriteFile`, `StrReplaceFile`, `SearchWeb`, `FetchURL` |
+| `explore` | Fast read-only codebase exploration: search, read, summarize | `Shell`, `ReadFile`, `Glob`, `Grep`, `SearchWeb`, `FetchURL` (no write tools) |
+| `plan` | Implementation planning and architecture design: analyze files, create plans | `ReadFile`, `Glob`, `Grep`, `SearchWeb`, `FetchURL` (no Shell, no write tools) |
+
+All subagent types are prohibited from nesting the `Agent` tool (subagents cannot create their own subagents). The `Agent` tool is only available to the root agent.
 
 ## How subagents run
 
-Subagents launched via the `Task` tool run in an isolated context and return results to the main agent when complete. Advantages of this approach:
+Subagents launched via the `Agent` tool run in an isolated context and return results to the main agent when complete. Each subagent instance maintains its own context history and metadata under `subagents/<agent_id>/` in the session directory, and can be resumed across multiple invocations. Advantages of this approach:
 
 - Isolated context, avoiding pollution of main agent's conversation history
 - Multiple independent tasks can be processed in parallel
 - Subagents can have targeted system prompts
-
-## Dynamic subagent creation
-
-`CreateSubagent` is an advanced tool that allows AI to dynamically define new subagent types at runtime (not enabled by default). Dynamically created subagents are persisted with the session state and automatically restored when resuming the session. To use it, add to your agent file:
-
-```yaml
-agent:
-  tools:
-    - "kimi_cli.tools.multiagent:CreateSubagent"
-```
+- Persistent instances preserve context across multiple calls
 
 ## Built-in tools list
 
 The following are all built-in tools in Kimi Code CLI.
 
-### `Task`
+### `Agent`
 
-- **Path**: `kimi_cli.tools.multiagent:Task`
-- **Description**: Dispatch a subagent to execute a task. Subagents cannot access the main agent's context; all necessary information must be provided in the prompt.
+- **Path**: `kimi_cli.tools.agent:Agent`
+- **Description**: Start or resume a subagent instance for a focused task. Three built-in subagent types are available: `coder` (general software engineering), `explore` (fast read-only codebase exploration), and `plan` (implementation planning and architecture design). Each instance maintains its own context history and supports foreground or background execution.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `description` | string | Short task description (3-5 words) |
-| `subagent_name` | string | Subagent name |
 | `prompt` | string | Detailed task description |
+| `subagent_type` | string | Built-in subagent type, default `coder` |
+| `model` | string | Optional model override |
+| `resume` | string | Optional agent instance ID to resume an existing instance |
+| `run_in_background` | bool | Whether to run in background, default false |
 
 ### `AskUserQuestion`
 
@@ -202,7 +206,11 @@ The following are all built-in tools in Kimi Code CLI.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `command` | string | Command to execute |
-| `timeout` | int | Timeout in seconds, default 60, max 300 |
+| `timeout` | int | Timeout in seconds, default 60, max 300 for foreground / 86400 for background |
+| `run_in_background` | bool | Whether to run as a background task, default false |
+| `description` | string | Short description for the background task, required when `run_in_background=true` |
+
+When `run_in_background=true`, the command is launched as a background task and the tool immediately returns a task ID, allowing the AI to continue working. The system automatically sends a notification when the task completes. Ideal for long-running builds, tests, watchers, and servers.
 
 ### `ReadFile`
 
@@ -227,7 +235,7 @@ The following are all built-in tools in Kimi Code CLI.
 ### `Glob`
 
 - **Path**: `kimi_cli.tools.file:Glob`
-- **Description**: Match files and directories by pattern. Returns max 1000 matches, patterns starting with `**` not allowed.
+- **Description**: Match files and directories by pattern. Returns max 1000 matches, patterns starting with `**` not allowed. Can also search within discovered skill roots, and `~` in paths is expanded to the user's home directory.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -328,19 +336,43 @@ This tool takes no parameters.
 ### `ExitPlanMode`
 
 - **Path**: `kimi_cli.tools.plan:ExitPlanMode`
-- **Description**: Submit a plan for user approval while in plan mode. Before calling, the plan must be written to the plan file. This tool reads the plan file content and presents it to the user for approval. The user can approve (exit plan mode and start execution), reject (stay in plan mode and wait for feedback), or provide revision comments. See [Plan mode](../guides/interaction.md#plan-mode).
-
-This tool takes no parameters.
-
-### `CreateSubagent`
-
-- **Path**: `kimi_cli.tools.multiagent:CreateSubagent`
-- **Description**: Dynamically create subagents
+- **Description**: Submit a plan for user approval while in plan mode. Before calling, the plan must be written to the plan file. This tool reads the plan file content and presents it to the user for approval. The user can select an implementation path (exit plan mode and start execution), reject (stay in plan mode and wait for feedback), or provide revision comments. See [Plan mode](../guides/interaction.md#plan-mode).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `name` | string | Unique name for the subagent, used to reference in `Task` tool |
-| `system_prompt` | string | System prompt defining agent's role, capabilities, and boundaries |
+| `options` | list \| null | When the plan contains multiple alternative implementation paths, list 2–3 options for the user to choose from. Each option has a `label` (1–8 word short name, may append "(Recommended)") and an optional `description` (brief summary). The labels "Approve", "Reject", and "Revise" are reserved and cannot be used. |
+
+### `TaskList`
+
+- **Path**: `kimi_cli.tools.background:TaskList`
+- **Description**: List background tasks in the current session. Useful for re-enumerating task IDs after context compaction or checking which tasks are still running.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `active_only` | bool | List only active tasks, default true |
+| `limit` | int | Maximum number of tasks to return (1–100), default 20 |
+
+### `TaskOutput`
+
+- **Path**: `kimi_cli.tools.background:TaskOutput`
+- **Description**: Retrieve output and status of a background task. Returns a non-blocking status/output snapshot by default; use `ReadFile` with the returned `output_path` to read the full log if output is truncated.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_id` | string | Task ID to query |
+| `block` | bool | Whether to wait for task completion, default false |
+| `timeout` | int | Maximum wait time in seconds when `block=true` (0–3600), default 30 |
+
+### `TaskStop`
+
+- **Path**: `kimi_cli.tools.background:TaskStop`
+- **Description**: Stop a running background task. Requires user approval. Use only when a task must be cancelled; for normal completion, wait for the automatic notification. Not available in plan mode.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_id` | string | Task ID to stop |
+| `reason` | string | Reason for stopping (optional), default "Stopped by TaskStop" |
+
 
 ## Tool security boundaries
 
@@ -359,3 +391,4 @@ The following operations require user approval:
 | Shell command execution | Each execution |
 | File write/edit | Each operation |
 | MCP tool calls | Each call |
+| Stop background task | Each stop |

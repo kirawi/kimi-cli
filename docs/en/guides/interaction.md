@@ -19,7 +19,7 @@ $ git status
 $ npm run build
 ```
 
-Shell mode also supports some slash commands, including `/help`, `/exit`, `/version`, `/editor`, `/changelog`, `/feedback`, `/export`, and `/import`.
+Shell mode also supports some slash commands, including `/help`, `/exit`, `/version`, `/editor`, `/changelog`, `/feedback`, `/export`, `/import`, and `/task`.
 
 ::: warning Note
 In shell mode, each command executes independently. Commands that change the environment like `cd` or `export` won't affect subsequent commands.
@@ -45,8 +45,9 @@ When plan mode is active, the prompt changes to `📋` and a blue `plan` badge a
 
 When the AI finishes its plan, it submits it for approval via `ExitPlanMode`. The approval panel shows the full plan content, and you can:
 
-- **Approve**: Accept the plan, exit plan mode, and let the AI begin execution
+- **Approve / select an approach**: If the plan contains multiple alternative implementation paths, the AI lists 2–3 labeled options (e.g. "Option A", "Option B (Recommended)") for you to choose from — selecting one exits plan mode and tells the AI which path to follow. If the plan has a single path, an **Approve** button is shown instead.
 - **Reject**: Decline the plan, stay in plan mode, and provide feedback via conversation
+- **Reject and Exit**: Decline the plan and exit plan mode in one step
 - **Revise**: Enter revision notes — the AI will update the plan and resubmit
 
 Press `Ctrl-E` to view the full plan content in a fullscreen pager.
@@ -81,8 +82,26 @@ While the AI is executing a task, you can type and send follow-up messages in th
 
 Steer messages are appended to the context after the current step completes, and the AI will see and respond to your message before the next step begins. Approval requests and question panels are also handled inline with keyboard navigation during agent execution.
 
+Any text you type in the input box during a turn but haven't yet submitted is preserved when the turn ends — it won't be lost. You can press `Enter` to send it as the next message, or continue editing.
+
 ::: tip
 Steer messages do not interrupt the AI's currently executing step — they are processed between steps. To interrupt immediately, use `Ctrl-C`.
+:::
+
+## Background tasks
+
+When the AI needs to run long-running commands (such as building a project, running a test suite, or starting a development server), it can launch them as background tasks. Background tasks run in a separate process, allowing the AI to continue handling other requests without waiting for the command to finish.
+
+How background tasks work:
+
+1. The AI uses the `Shell` tool with `run_in_background=true` to launch the command
+2. The tool immediately returns a task ID, and the AI continues with other work
+3. When the task completes, if the AI is idle (waiting for user input), the system automatically triggers a new agent turn to process the results — no manual input needed
+
+You can use the `/task` slash command to open the interactive task browser, where you can view the status and output of all background tasks in real time (including tasks that are still running). See [Slash commands reference](../reference/slash-commands.md#task) for details.
+
+::: tip
+By default, up to 4 background tasks can run simultaneously. This can be adjusted in the `[background]` section of the config file. All background tasks are terminated when the CLI exits by default. See [Configuration files](../configuration/config-files.md#background).
 :::
 
 ## Multi-line input
@@ -95,7 +114,7 @@ After finishing your input, press `Enter` to send the complete message.
 
 Press `Ctrl-V` to paste text, images, or video files from the clipboard.
 
-In agent mode, longer pasted text (over 300 characters or 3 lines) is automatically collapsed into a `[Pasted text #n]` placeholder in the input box to keep the interface clean. The full content is still expanded and sent to the model when submitting. When using an external editor (`Ctrl-O`), placeholders are automatically expanded to the original text; unmodified portions are re-collapsed after saving.
+In agent mode, longer pasted text (over 1000 characters or 15 lines) is automatically collapsed into a `[Pasted text #n]` placeholder in the input box to keep the interface clean. The full content is still expanded and sent to the model when submitting. When using an external editor (`Ctrl-O`), placeholders are automatically expanded to the original text; unmodified portions are re-collapsed after saving.
 
 If the clipboard contains an image, Kimi Code CLI caches the image to disk and displays it as an `[image:…]` placeholder in the input box. After sending the message, the AI can see and analyze the image. If the clipboard contains a video file, its file path is inserted as text into the input box.
 
@@ -144,6 +163,7 @@ The confirmation prompt will show operation details, including shell command and
 - **Allow**: Execute this operation
 - **Allow for this session**: Automatically approve similar operations in the current session (this decision is persisted with the session and automatically restored when resuming)
 - **Reject**: Do not execute this operation
+- **Reject with feedback**: Decline the operation and provide written feedback telling the agent how to adjust
 
 If you trust the AI's operations, or you're running Kimi Code CLI in a safe isolated environment, you can enable "YOLO mode" to automatically approve all requests:
 

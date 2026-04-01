@@ -3,7 +3,7 @@
 Slash commands are built-in commands for Kimi Code CLI, used to control sessions, configuration, and debugging. Enter a command starting with `/` in the input box to trigger.
 
 ::: tip Shell mode
-Some slash commands are also available in shell mode, including `/help`, `/exit`, `/version`, `/editor`, `/changelog`, `/feedback`, `/export`, and `/import`.
+Some slash commands are also available in shell mode, including `/help`, `/exit`, `/version`, `/editor`, `/theme`, `/changelog`, `/feedback`, `/export`, `/import`, and `/task`.
 :::
 
 ## Help and info
@@ -26,7 +26,7 @@ Alias: `/release-notes`
 
 ### `/feedback`
 
-Open the GitHub Issues page to submit feedback.
+Submit feedback to help improve Kimi Code CLI. You will be prompted to enter your feedback and submit it. If the network request fails or times out, the command automatically falls back to opening the GitHub Issues page.
 
 ## Account and configuration
 
@@ -65,6 +65,18 @@ This command is only available when using the default configuration file. If a c
 
 Set the external editor. When called without arguments, displays an interactive selection interface; you can also specify the editor command directly, e.g., `/editor vim`. After configuration, pressing `Ctrl-O` will open this editor to edit the current input content. See [Keyboard shortcuts](./keyboard.md#external-editor) for details.
 
+### `/theme`
+
+Switch the terminal color theme. Kimi Code CLI provides dark and light color palettes, defaulting to dark.
+
+Usage:
+
+- `/theme`: Show the current theme
+- `/theme dark`: Switch to dark theme
+- `/theme light`: Switch to light theme
+
+After switching, the configuration is saved to `config.toml` and the shell reloads automatically. The light theme adjusts colors for diff highlights, the task browser, the prompt completion menu, the bottom toolbar, and MCP status indicators to work well on light terminal backgrounds. You can also set `theme = "light"` directly in your config file — see [Config files](../configuration/config-files.md).
+
 ### `/reload`
 
 Reload the configuration file without exiting Kimi Code CLI.
@@ -95,6 +107,14 @@ Display currently connected MCP servers and loaded tools. See [Model Context Pro
 Output includes:
 - Server connection status (green indicates connected)
 - List of tools provided by each server
+
+### `/hooks`
+
+Display currently configured hooks. See [Hooks](../customization/hooks.md) for details.
+
+Output includes:
+- Event types and counts of configured hooks
+- Help message (if no hooks are configured)
 
 ## Session management
 
@@ -214,6 +234,32 @@ Usage:
 - `/plan clear`: Clear the current plan file
 
 When plan mode is enabled, the prompt changes to `📋` and a blue `plan` badge appears in the status bar.
+
+### `/task`
+
+Open the interactive task browser to view, monitor, and manage background tasks.
+
+The task browser is a three-column TUI:
+
+- **Left column**: Task list showing task ID, status, and description
+- **Middle column**: Detailed information for the selected task, including ID, status, description, timestamps, exit code, etc.
+- **Right column**: Output preview showing the last few lines
+
+Supported keyboard shortcuts:
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` / `O` | View the selected task's full output in a pager |
+| `S` | Request to stop the selected task (requires confirmation) |
+| `Tab` | Toggle filter mode (all / active tasks only) |
+| `R` | Refresh the task list |
+| `Q` / `Esc` | Exit the browser |
+
+The task browser automatically refreshes every second, showing real-time task status changes.
+
+::: tip
+Background tasks are started by the AI using the `Shell` tool with `run_in_background=true`. The system automatically notifies the AI when background tasks complete.
+:::
 
 ### `/yolo`
 

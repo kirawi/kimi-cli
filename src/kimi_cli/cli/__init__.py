@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import sys
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
 
-from kimi_cli.constant import VERSION
-
-from .export import cli as export_cli
-from .info import cli as info_cli
-from .mcp import cli as mcp_cli
-from .vis import cli as vis_cli
-from .web import cli as web_cli
+from ._lazy_group import LazySubcommandGroup
 
 
 class Reload(Exception):
@@ -33,7 +24,16 @@ class SwitchToWeb(Exception):
         self.session_id = session_id
 
 
+class SwitchToVis(Exception):
+    """Switch to vis (tracing visualizer) interface."""
+
+    def __init__(self, session_id: str | None = None):
+        super().__init__("switch_to_vis")
+        self.session_id = session_id
+
+
 cli = typer.Typer(
+    cls=LazySubcommandGroup,
     epilog="""\b\
 Documentation:        https://moonshotai.github.io/kimi-cli/\n
 LLM friendly version: https://moonshotai.github.io/kimi-cli/llms.txt""",
@@ -43,13 +43,23 @@ LLM friendly version: https://moonshotai.github.io/kimi-cli/llms.txt""",
 )
 
 UIMode = Literal["shell", "print", "acp", "wire"]
+
+
+class ExitCode:
+    SUCCESS = 0
+    FAILURE = 1
+    RETRYABLE = 75  # EX_TEMPFAIL from sysexits.h
+
+
 InputFormat = Literal["text", "stream-json"]
 OutputFormat = Literal["text", "stream-json"]
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"kimi, version {VERSION}")
+        from kimi_cli.constant import get_version
+
+        typer.echo(f"kimi, version {get_version()}")
         raise typer.Exit()
 
 
@@ -278,14 +288,14 @@ def kimi(
         ),
     ] = None,
     local_skills_dir: Annotated[
-        Path | None,
+        list[Path] | None,
         typer.Option(
             "--skills-dir",
             exists=True,
             file_okay=False,
             dir_okay=True,
             readable=True,
-            help="Path to the skills directory. Overrides discovery.",
+            help="Custom skills directories (repeatable). Overrides default discovery.",
         ),
     ] = None,
     # Loop control
@@ -318,6 +328,10 @@ def kimi(
     ] = None,
 ):
     """Kimi, your next CLI agent."""
+    import asyncio
+    import contextlib
+    import json
+
     from kimi_cli.utils.proctitle import init_process_name
 
     init_process_name("Kimi Code")
@@ -333,15 +347,18 @@ def kimi(
     from kimi_cli.app import KimiCLI, enable_logging
     from kimi_cli.config import Config, load_config_from_string
     from kimi_cli.exception import ConfigError
+    from kimi_cli.hooks import events as hook_events
     from kimi_cli.metadata import load_metadata, save_metadata
     from kimi_cli.session import Session
+    from kimi_cli.ui.shell.startup import ShellStartupProgress
     from kimi_cli.utils.logging import logger, open_original_stderr, redirect_stderr_to_logger
 
     from .mcp import get_global_mcp_config_file
 
-    # Don't redirect stderr yet. Our stderr redirector replaces fd=2 with a pipe, which
-    # would swallow Click/Typer startup errors (e.g. config parsing / BadParameter).
-    # We re-enable stderr redirection after KimiCLI.create() succeeds.
+    # Don't redirect stderr during argument parsing. Our stderr redirector
+    # replaces fd=2 with a pipe, which would swallow Click/Typer startup errors.
+    # Redirection is installed later, right before KimiCLI.create(), so that
+    # MCP server stderr noise is captured into logs from the start.
     enable_logging(debug, redirect_stderr=False)
 
     def _emit_fatal_error(message: str) -> None:
@@ -468,107 +485,166 @@ def kimi(
     except json.JSONDecodeError as e:
         raise typer.BadParameter(f"Invalid JSON: {e}", param_hint="--mcp-config") from e
 
-    skills_dir: KaosPath | None = None
-    if local_skills_dir is not None:
-        skills_dir = KaosPath.unsafe_from_local_path(local_skills_dir)
+    skills_dirs: list[KaosPath] | None = None
+    if local_skills_dir:
+        skills_dirs = [KaosPath.unsafe_from_local_path(p) for p in local_skills_dir]
 
     work_dir = KaosPath.unsafe_from_local_path(local_work_dir) if local_work_dir else KaosPath.cwd()
 
-    async def _run(session_id: str | None) -> tuple[Session, bool]:
+    async def _run(session_id: str | None) -> tuple[Session, int]:
         """
         Create/load session and run the CLI instance.
 
         Returns:
-            The session and whether the run succeeded.
+            The session and the exit code (0 = success, 1 = failure, 75 = retryable).
         """
-        if session_id is not None:
-            session = await Session.find(work_dir, session_id)
-            if session is None:
-                logger.info(
-                    "Session {session_id} not found, creating new session", session_id=session_id
-                )
-                session = await Session.create(work_dir, session_id)
-            logger.info("Switching to session: {session_id}", session_id=session.id)
-        elif continue_:
-            session = await Session.continue_(work_dir)
-            if session is None:
-                raise typer.BadParameter(
-                    "No previous session found for the working directory",
-                    param_hint="--continue",
-                )
-            logger.info("Continuing previous session: {session_id}", session_id=session.id)
-        else:
-            session = await Session.create(work_dir)
-            logger.info("Created new session: {session_id}", session_id=session.id)
-
-        # Add CLI-provided additional directories to session state
-        if local_add_dirs:
-            from kimi_cli.utils.path import is_within_directory
-
-            canonical_work_dir = work_dir.canonical()
-            changed = False
-            for d in local_add_dirs:
-                dir_path = KaosPath.unsafe_from_local_path(d).canonical()
-                dir_str = str(dir_path)
-                # Skip dirs within work_dir (already accessible)
-                if is_within_directory(dir_path, canonical_work_dir):
-                    logger.info(
-                        "Skipping --add-dir {dir}: already within working directory",
-                        dir=dir_str,
-                    )
-                    continue
-                if dir_str not in session.state.additional_dirs:
-                    session.state.additional_dirs.append(dir_str)
-                    changed = True
-            if changed:
-                session.save_state()
-
-        instance = await KimiCLI.create(
-            session,
-            config=config,
-            model_name=model_name,
-            thinking=thinking,
-            yolo=yolo or (ui == "print"),  # print mode implies yolo
-            agent_file=agent_file,
-            mcp_configs=mcp_configs,
-            skills_dir=skills_dir,
-            max_steps_per_turn=max_steps_per_turn,
-            max_retries_per_step=max_retries_per_step,
-            max_ralph_iterations=max_ralph_iterations,
-        )
-        # Install stderr redirection only after initialization succeeded, so runtime
-        # stderr noise is captured into logs without hiding startup failures.
-        redirect_stderr_to_logger()
+        startup_progress = ShellStartupProgress(enabled=ui == "shell")
         try:
-            match ui:
-                case "shell":
-                    succeeded = await instance.run_shell(prompt)
-                case "print":
-                    succeeded = await instance.run_print(
-                        input_format or "text",
-                        output_format or "text",
-                        prompt,
-                        final_only=final_message_only,
+            startup_progress.update("Preparing session...")
+
+            if session_id is not None:
+                session = await Session.find(work_dir, session_id)
+                if session is None:
+                    logger.info(
+                        "Session {session_id} not found, creating new session",
+                        session_id=session_id,
                     )
-                case "acp":
-                    if prompt is not None:
-                        logger.warning("ACP server ignores prompt argument")
-                    await instance.run_acp()
-                    succeeded = True
-                case "wire":
-                    if prompt is not None:
-                        logger.warning("Wire server ignores prompt argument")
-                    await instance.run_wire_stdio()
-                    succeeded = True
-        except Reload as e:
-            if e.session_id is None:
-                raise Reload(session_id=session.id) from e
-            raise
+                    session = await Session.create(work_dir, session_id)
+                logger.info("Switching to session: {session_id}", session_id=session.id)
+            elif continue_:
+                session = await Session.continue_(work_dir)
+                if session is None:
+                    raise typer.BadParameter(
+                        "No previous session found for the working directory",
+                        param_hint="--continue",
+                    )
+                logger.info("Continuing previous session: {session_id}", session_id=session.id)
+            else:
+                session = await Session.create(work_dir)
+                logger.info("Created new session: {session_id}", session_id=session.id)
 
-        return session, succeeded
+            # Add CLI-provided additional directories to session state
+            if local_add_dirs:
+                from kimi_cli.utils.path import is_within_directory
 
-    async def _post_run(last_session: Session, succeeded: bool) -> None:
-        if not succeeded:
+                canonical_work_dir = work_dir.canonical()
+                changed = False
+                for d in local_add_dirs:
+                    dir_path = KaosPath.unsafe_from_local_path(d).canonical()
+                    dir_str = str(dir_path)
+                    # Skip dirs within work_dir (already accessible)
+                    if is_within_directory(dir_path, canonical_work_dir):
+                        logger.info(
+                            "Skipping --add-dir {dir}: already within working directory",
+                            dir=dir_str,
+                        )
+                        continue
+                    if dir_str not in session.state.additional_dirs:
+                        session.state.additional_dirs.append(dir_str)
+                        changed = True
+                if changed:
+                    session.save_state()
+
+            # Redirect stderr *before* KimiCLI.create() so that MCP server
+            # subprocesses (e.g. mcp-remote OAuth debug logs) write to the log
+            # file instead of polluting the user's terminal.  CLI argument
+            # parsing has already succeeded at this point, so Typer/Click
+            # startup errors are no longer a concern.  Fatal errors from
+            # create() are still visible because _emit_fatal_error() writes to
+            # the saved original stderr fd.
+            redirect_stderr_to_logger()
+
+            instance = await KimiCLI.create(
+                session,
+                config=config,
+                model_name=model_name,
+                thinking=thinking,
+                yolo=yolo or (ui == "print"),  # print mode implies yolo
+                agent_file=agent_file,
+                mcp_configs=mcp_configs,
+                skills_dirs=skills_dirs,
+                max_steps_per_turn=max_steps_per_turn,
+                max_retries_per_step=max_retries_per_step,
+                max_ralph_iterations=max_ralph_iterations,
+                startup_progress=startup_progress.update if ui == "shell" else None,
+                defer_mcp_loading=ui == "shell" and prompt is None,
+            )
+            startup_progress.stop()
+
+            # --- SessionStart hook ---
+            _session_source = "resume" if continue_ else "startup"
+            await instance.soul.hook_engine.trigger(
+                "SessionStart",
+                matcher_value=_session_source,
+                input_data=hook_events.session_start(
+                    session_id=session.id,
+                    cwd=str(work_dir),
+                    source=_session_source,
+                ),
+            )
+
+            # Install stderr redirection only after initialization succeeded, so runtime
+            # stderr noise is captured into logs without hiding startup failures.
+            redirect_stderr_to_logger()
+            preserve_background_tasks = False
+            try:
+                match ui:
+                    case "shell":
+                        shell_ok = await instance.run_shell(prompt)
+                        exit_code = ExitCode.SUCCESS if shell_ok else ExitCode.FAILURE
+                    case "print":
+                        exit_code = await instance.run_print(
+                            input_format or "text",
+                            output_format or "text",
+                            prompt,
+                            final_only=final_message_only,
+                        )
+                    case "acp":
+                        if prompt is not None:
+                            logger.warning("ACP server ignores prompt argument")
+                        await instance.run_acp()
+                        exit_code = ExitCode.SUCCESS
+                    case "wire":
+                        if prompt is not None:
+                            logger.warning("Wire server ignores prompt argument")
+                        await instance.run_wire_stdio()
+                        exit_code = ExitCode.SUCCESS
+            except Reload as e:
+                preserve_background_tasks = True
+                if e.session_id is None:
+                    raise Reload(session_id=session.id) from e
+                raise
+            except SwitchToWeb:
+                preserve_background_tasks = True
+                raise
+            except SwitchToVis:
+                preserve_background_tasks = True
+                raise
+            finally:
+                # --- SessionEnd hook ---
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        instance.soul.hook_engine.trigger(
+                            "SessionEnd",
+                            matcher_value="exit",
+                            input_data=hook_events.session_end(
+                                session_id=session.id,
+                                cwd=str(work_dir),
+                                reason="exit",
+                            ),
+                        ),
+                        timeout=5,
+                    )
+
+                if not preserve_background_tasks:
+                    instance.shutdown_background_tasks()
+
+            return session, exit_code
+        finally:
+            startup_progress.stop()
+
+    async def _post_run(last_session: Session, exit_code: int) -> None:
+        if exit_code != ExitCode.SUCCESS:
             return
 
         metadata = load_metadata()
@@ -596,14 +672,16 @@ def kimi(
 
         save_metadata(metadata)
 
-    async def _reload_loop(session_id: str | None) -> bool:
-        """
+    async def _reload_loop(session_id: str | None) -> tuple[str | None, int]:
+        """Run the main loop, handling Reload/SwitchToWeb/SwitchToVis.
+
         Returns:
-            True if should switch to web interface, False otherwise.
+            (switch_target, exit_code) where switch_target is "web", "vis",
+            or None if the session ended normally.
         """
         while True:
             try:
-                last_session, succeeded = await _run(session_id)
+                last_session, exit_code = await _run(session_id)
                 break
             except Reload as e:
                 session_id = e.session_id
@@ -612,13 +690,19 @@ def kimi(
                 if e.session_id is not None:
                     session = await Session.find(work_dir, e.session_id)
                     if session is not None:
-                        await _post_run(session, True)
-                return True
-        await _post_run(last_session, succeeded)
-        return False
+                        await _post_run(session, ExitCode.SUCCESS)
+                return "web", ExitCode.SUCCESS
+            except SwitchToVis as e:
+                if e.session_id is not None:
+                    session = await Session.find(work_dir, e.session_id)
+                    if session is not None:
+                        await _post_run(session, ExitCode.SUCCESS)
+                return "vis", ExitCode.SUCCESS
+        await _post_run(last_session, exit_code)
+        return None, exit_code
 
     try:
-        switch_to_web = asyncio.run(_reload_loop(session_id))
+        switch_target, exit_code = asyncio.run(_reload_loop(session_id))
     except (typer.BadParameter, typer.Exit):
         # Let Typer/Click format these errors (rich panel + correct exit code).
         raise
@@ -642,7 +726,7 @@ def kimi(
             # In non-debug mode, print a concise error and point users to logs.
             _emit_fatal_error(f"{exc}\nSee logs: {log_path}")
         raise typer.Exit(code=1) from exc
-    if switch_to_web:
+    if switch_target in ("web", "vis"):
         from kimi_cli.utils.logging import restore_stderr
 
         restore_stderr()
@@ -657,12 +741,16 @@ def kimi(
 
         ensure_tty_sane()
 
-        from kimi_cli.web.app import run_web_server
+        if switch_target == "web":
+            from kimi_cli.web.app import run_web_server
 
-        run_web_server(open_browser=True)
+            run_web_server(open_browser=True)
+        else:
+            from kimi_cli.vis.app import run_vis_server
 
-
-cli.add_typer(info_cli, name="info")
+            run_vis_server(open_browser=True)
+    elif exit_code != ExitCode.SUCCESS:
+        raise typer.Exit(code=exit_code)
 
 
 @cli.command()
@@ -674,6 +762,8 @@ def login(
     ),
 ) -> None:
     """Login to your Kimi account."""
+    import asyncio
+
     from rich.console import Console
     from rich.status import Status
 
@@ -731,6 +821,8 @@ def logout(
     ),
 ) -> None:
     """Logout from your Kimi account."""
+    import asyncio
+
     from rich.console import Console
 
     from kimi_cli.auth.oauth import logout_kimi_code
@@ -782,9 +874,38 @@ def acp():
     acp_main()
 
 
+@cli.command(name="__background-task-worker", hidden=True)
+def background_task_worker(
+    task_dir: Annotated[Path, typer.Option("--task-dir")],
+    heartbeat_interval_ms: Annotated[int, typer.Option("--heartbeat-interval-ms")] = 5000,
+    control_poll_interval_ms: Annotated[int, typer.Option("--control-poll-interval-ms")] = 500,
+    kill_grace_period_ms: Annotated[int, typer.Option("--kill-grace-period-ms")] = 2000,
+) -> None:
+    """Run background task worker subprocess (internal)."""
+    import asyncio
+
+    from kimi_cli.background import run_background_task_worker
+    from kimi_cli.utils.proctitle import set_process_title
+
+    set_process_title("kimi-code-bg-worker")
+
+    from kimi_cli.app import enable_logging
+
+    enable_logging(debug=False)
+    asyncio.run(
+        run_background_task_worker(
+            task_dir,
+            heartbeat_interval_ms=heartbeat_interval_ms,
+            control_poll_interval_ms=control_poll_interval_ms,
+            kill_grace_period_ms=kill_grace_period_ms,
+        )
+    )
+
+
 @cli.command(name="__web-worker", hidden=True)
 def web_worker(session_id: str) -> None:
     """Run web worker subprocess (internal)."""
+    import asyncio
     from uuid import UUID
 
     from kimi_cli.utils.proctitle import set_process_title
@@ -803,13 +924,9 @@ def web_worker(session_id: str) -> None:
     asyncio.run(run_worker(parsed_session_id))
 
 
-cli.add_typer(export_cli, name="export")
-cli.add_typer(mcp_cli, name="mcp")
-cli.add_typer(vis_cli, name="vis")
-cli.add_typer(web_cli, name="web")
-
-
 if __name__ == "__main__":
+    import sys
+
     if "kimi_cli.cli" not in sys.modules:
         sys.modules["kimi_cli.cli"] = sys.modules[__name__]
 

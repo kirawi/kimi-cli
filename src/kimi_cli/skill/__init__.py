@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Literal
 
 from kaos import get_current_kaos
 from kaos.local import local_kaos
 from kaos.path import KaosPath
-from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
+from kimi_cli import logger
 from kimi_cli.skill.flow import Flow, FlowError
 from kimi_cli.skill.flow.d2 import parse_d2_flowchart
 from kimi_cli.skill.flow.mermaid import parse_mermaid_flowchart
@@ -85,24 +85,31 @@ async def find_project_skills_dir(work_dir: KaosPath) -> KaosPath | None:
 async def resolve_skills_roots(
     work_dir: KaosPath,
     *,
-    skills_dir_override: KaosPath | None = None,
+    skills_dirs: Sequence[KaosPath] | None = None,
 ) -> list[KaosPath]:
     """
     Resolve layered skill roots in priority order.
 
-    Built-in skills load first when supported by the active KAOS backend. When an
-    override is provided, user/project discovery is skipped.
+    Built-in skills load first when supported by the active KAOS backend.
+    When custom directories are provided via ``--skills-dir``, they **override**
+    user/project discovery.  Plugins are always discoverable.
     """
+    from kimi_cli.plugin.manager import get_plugins_dir
+
     roots: list[KaosPath] = []
     if _supports_builtin_skills():
         roots.append(KaosPath.unsafe_from_local_path(get_builtin_skills_dir()))
-    if skills_dir_override is not None:
-        roots.append(skills_dir_override)
-        return roots
-    if user_dir := await find_user_skills_dir():
-        roots.append(user_dir)
-    if project_dir := await find_project_skills_dir(work_dir):
-        roots.append(project_dir)
+    if skills_dirs:
+        roots.extend(skills_dirs)
+    else:
+        if user_dir := await find_user_skills_dir():
+            roots.append(user_dir)
+        if project_dir := await find_project_skills_dir(work_dir):
+            roots.append(project_dir)
+    # Plugins are always discoverable
+    plugins_path = get_plugins_dir()
+    if plugins_path.is_dir():
+        roots.append(KaosPath.unsafe_from_local_path(plugins_path))
     return roots
 
 
@@ -123,7 +130,7 @@ async def discover_skills_from_roots(skills_dirs: Iterable[KaosPath]) -> list[Sk
     skills_by_name: dict[str, Skill] = {}
     for skills_dir in skills_dirs:
         for skill in await discover_skills(skills_dir):
-            skills_by_name[normalize_skill_name(skill.name)] = skill
+            skills_by_name.setdefault(normalize_skill_name(skill.name), skill)
     return sorted(skills_by_name.values(), key=lambda s: s.name)
 
 

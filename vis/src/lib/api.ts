@@ -2,9 +2,33 @@ import { apiCache } from "./cache.ts";
 
 const BASE = "/api/vis";
 
-async function fetchJSON<T>(path: string): Promise<T> {
+/** Simple concurrency limiter for batching API requests. */
+class ConcurrencyLimiter {
+  private running = 0;
+  private queue: (() => void)[] = [];
+
+  constructor(private maxConcurrent: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.running >= this.maxConcurrent) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.running++;
+    try {
+      return await fn();
+    } finally {
+      this.running--;
+      this.queue.shift()?.();
+    }
+  }
+}
+
+/** Limit concurrent summary requests to avoid overwhelming the backend. */
+const summaryLimiter = new ConcurrencyLimiter(3);
+
+async function fetchJSON<T>(path: string, timeoutMs = 30_000): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE}${path}`, { signal: controller.signal });
     if (!res.ok) {
@@ -48,6 +72,7 @@ export interface SessionInfo {
   total_size: number;
   turns: number;
   imported?: boolean;
+  subagent_count?: number;
 }
 
 export interface SessionSummary {
@@ -137,7 +162,7 @@ export interface ContextResponse {
 
 export function listSessions(forceRefresh = false): Promise<SessionInfo[]> {
   if (forceRefresh) apiCache.invalidate("sessions");
-  return apiCache.get("sessions", () => fetchJSON<SessionInfo[]>("/sessions"), 30_000);
+  return apiCache.get("sessions", () => fetchJSON<SessionInfo[]>("/sessions", 120_000), 30_000);
 }
 
 const CONTENT_PART_MAP: Record<string, string> = {
@@ -261,7 +286,9 @@ export function getSessionSummary(
 ): Promise<SessionSummary> {
   const key = `summary:${sessionId}`;
   if (forceRefresh) apiCache.invalidate(key);
-  return apiCache.get(key, () => fetchJSON<SessionSummary>(`/sessions/${sessionId}/summary`));
+  return apiCache.get(key, () =>
+    summaryLimiter.run(() => fetchJSON<SessionSummary>(`/sessions/${sessionId}/summary`)),
+  );
 }
 
 export async function importSession(file: File): Promise<{ session_id: string; work_dir_hash: string }> {
@@ -285,6 +312,47 @@ export async function importSession(file: File): Promise<{ session_id: string; w
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export type SubagentStatus =
+  | "idle"
+  | "running_foreground"
+  | "running_background"
+  | "completed"
+  | "failed"
+  | "killed";
+
+export interface SubagentInfo {
+  agent_id: string;
+  subagent_type: string;
+  status: SubagentStatus;
+  description: string;
+  created_at: number;
+  updated_at: number;
+  last_task_id: string | null;
+  wire_size: number;
+  context_size: number;
+  launch_spec: Record<string, unknown>;
+}
+
+export function getSubagents(sessionId: string, forceRefresh = false): Promise<SubagentInfo[]> {
+  const key = `subagents:${sessionId}`;
+  if (forceRefresh) apiCache.invalidate(key);
+  return apiCache.get(key, () => fetchJSON<SubagentInfo[]>(`/sessions/${sessionId}/subagents`));
+}
+
+export function getSubagentWireEvents(sessionId: string, agentId: string, forceRefresh = false): Promise<WireResponse> {
+  const key = `subagent-wire:${sessionId}:${agentId}`;
+  if (forceRefresh) apiCache.invalidate(key);
+  return apiCache.get(key, () =>
+    fetchJSON<WireResponse>(`/sessions/${sessionId}/subagents/${agentId}/wire`).then(normalizeWireEvents),
+  );
+}
+
+export function getSubagentContextMessages(sessionId: string, agentId: string, forceRefresh = false): Promise<ContextResponse> {
+  const key = `subagent-context:${sessionId}:${agentId}`;
+  if (forceRefresh) apiCache.invalidate(key);
+  return apiCache.get(key, () => fetchJSON<ContextResponse>(`/sessions/${sessionId}/subagents/${agentId}/context`));
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

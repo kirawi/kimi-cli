@@ -26,7 +26,7 @@ If you only need simple non-interactive input/output, [print mode](./print-mode.
 
 ## Wire protocol
 
-Wire uses a JSON-RPC 2.0 based protocol for bidirectional communication via stdin/stdout. The current protocol version is `1.5`. Each message is a single line of JSON conforming to the JSON-RPC 2.0 specification.
+Wire uses a JSON-RPC 2.0 based protocol for bidirectional communication via stdin/stdout. The current protocol version is `1.7`. Each message is a single line of JSON conforming to the JSON-RPC 2.0 specification.
 
 ### Protocol type definitions
 
@@ -89,6 +89,8 @@ interface InitializeParams {
   external_tools?: ExternalTool[]
   /** Client capabilities, optional */
   capabilities?: ClientCapabilities
+  /** Hook subscriptions, optional. Declares hook events the client wants to handle */
+  hooks?: WireHookSubscription[]
 }
 
 interface ClientCapabilities {
@@ -96,6 +98,17 @@ interface ClientCapabilities {
   supports_question?: boolean
   /** Whether the client supports plan mode */
   supports_plan_mode?: boolean
+}
+
+interface WireHookSubscription {
+  /** Subscription ID, referenced in HookRequest */
+  id: string
+  /** Event type to subscribe to, e.g., 'PreToolUse', 'Stop' */
+  event: string
+  /** Regex filter, empty string matches all */
+  matcher?: string
+  /** Timeout for client response in seconds, default 30 */
+  timeout?: number
 }
 
 interface ClientInfo {
@@ -124,6 +137,15 @@ interface InitializeResult {
   external_tools?: ExternalToolsResult
   /** Server capabilities */
   capabilities?: ServerCapabilities
+  /** Hook system info, optional */
+  hooks?: HooksInfo
+}
+
+interface HooksInfo {
+  /** List of all hook event types supported by the server */
+  supported_events: string[]
+  /** Currently configured hooks statistics, key is event type, value is count */
+  configured: Record<string, number>
 }
 
 interface ServerCapabilities {
@@ -153,13 +175,13 @@ interface ExternalToolsResult {
 **Request example**
 
 ```json
-{"jsonrpc": "2.0", "method": "initialize", "id": "550e8400-e29b-41d4-a716-446655440000", "params": {"protocol_version": "1.5", "client": {"name": "my-ui", "version": "1.0.0"}, "capabilities": {"supports_question": true}, "external_tools": [{"name": "open_in_ide", "description": "Open file in IDE", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}]}}
+{"jsonrpc": "2.0", "method": "initialize", "id": "550e8400-e29b-41d4-a716-446655440000", "params": {"protocol_version": "1.7", "client": {"name": "my-ui", "version": "1.0.0"}, "capabilities": {"supports_question": true}, "external_tools": [{"name": "open_in_ide", "description": "Open file in IDE", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}]}}
 ```
 
 **Success response example**
 
 ```json
-{"jsonrpc": "2.0", "id": "550e8400-e29b-41d4-a716-446655440000", "result": {"protocol_version": "1.5", "server": {"name": "Kimi Code CLI", "version": "1.14.0"}, "slash_commands": [{"name": "init", "description": "Analyze the codebase ...", "aliases": []}], "capabilities": {"supports_question": true}, "external_tools": {"accepted": ["open_in_ide"], "rejected": []}}}
+{"jsonrpc": "2.0", "id": "550e8400-e29b-41d4-a716-446655440000", "result": {"protocol_version": "1.7", "server": {"name": "Kimi Code CLI", "version": "1.14.0"}, "slash_commands": [{"name": "init", "description": "Analyze the codebase ...", "aliases": []}], "capabilities": {"supports_question": true}, "external_tools": {"accepted": ["open_in_ide"], "rejected": []}}}
 ```
 
 If the server does not support the `initialize` method, the client will receive a `-32601 method not found` error and should automatically fall back to no-handshake mode.
@@ -477,9 +499,12 @@ type Event =
   | ApprovalResponse
   | SubagentEvent
   | SteerInput
+  | PlanDisplay
+  | HookTriggered
+  | HookResolved
 
 /** Requests: sent via request method, require response */
-type Request = ApprovalRequest | ToolCallRequest | QuestionRequest
+type Request = ApprovalRequest | ToolCallRequest | QuestionRequest | HookRequest
 ```
 
 ### `TurnBegin`
@@ -690,17 +715,27 @@ interface ApprovalResponse {
   request_id: string
   /** Approval result */
   response: "approve" | "approve_for_session" | "reject"
+  /** Optional feedback text when rejecting, may be absent in JSON */
+  feedback?: string
 }
 ```
 
 ### `SubagentEvent`
 
+::: info Changed
+Changed in Wire 1.6. `task_tool_call_id` renamed to `parent_tool_call_id`; added `agent_id` and `subagent_type` fields.
+:::
+
 Subagent event.
 
 ```typescript
 interface SubagentEvent {
-  /** Associated Task tool call ID */
-  task_tool_call_id: string
+  /** Associated parent Agent tool call ID, may be absent in JSON */
+  parent_tool_call_id?: string | null
+  /** Subagent instance ID, may be absent in JSON */
+  agent_id?: string | null
+  /** Built-in subagent type used by this instance, may be absent in JSON */
+  subagent_type?: string | null
   /** Event from subagent, nested Wire message format */
   event: { type: string; payload: object }
 }
@@ -721,7 +756,70 @@ interface SteerInput {
 }
 ```
 
+### `PlanDisplay`
+
+::: info Added
+Added in Wire 1.7.
+:::
+
+Plan content display event. When the agent calls `ExitPlanMode` to submit a plan for user approval in plan mode, this event is sent first to display the plan content inline in the chat. Clients should render it as a bordered panel or similar visually distinct element, and show the file path for reference.
+
+```typescript
+interface PlanDisplay {
+  /** Full markdown content of the plan */
+  content: string
+  /** Path to the plan file */
+  file_path: string
+}
+```
+
+### `HookTriggered`
+
+::: info Added
+Added in Wire 1.7.
+:::
+
+Hook execution started event. Sent when configured hooks are triggered and begin executing, to notify the client that hooks are running.
+
+```typescript
+interface HookTriggered {
+  /** Hook event type, e.g., 'PreToolUse', 'Stop' */
+  event: string
+  /** Target of the hook: tool name for tool hooks, agent name for subagent hooks, etc. */
+  target: string
+  /** Number of matched hooks running in parallel */
+  hook_count: number
+}
+```
+
+### `HookResolved`
+
+::: info Added
+Added in Wire 1.7.
+:::
+
+Hook execution completed event. Sent when hooks finish executing, containing the result and duration information.
+
+```typescript
+interface HookResolved {
+  /** Hook event type, e.g., 'PreToolUse', 'Stop' */
+  event: string
+  /** Same as HookTriggered.target */
+  target: string
+  /** Aggregate decision: 'block' if any hook blocked, 'allow' otherwise */
+  action: "allow" | "block"
+  /** Reason for blocking, empty if allowed */
+  reason: string
+  /** Wall-clock time for the entire batch in milliseconds */
+  duration_ms: number
+}
+```
+
 ### `ApprovalRequest`
+
+::: info Changed
+Changed in Wire 1.6. Added `source_kind`, `source_id`, `agent_id`, `subagent_type`, and `source_description` fields.
+:::
 
 Approval request, sent via `request` method, client must respond before agent can continue.
 
@@ -739,10 +837,24 @@ interface ApprovalRequest {
   description: string
   /** Display blocks shown to user, may be absent in JSON, defaults to [] */
   display?: DisplayBlock[]
+  /** Where the request originated: foreground turn or background agent, may be absent in JSON */
+  source_kind?: "foreground_turn" | "background_agent" | null
+  /** Source identifier (e.g. background agent ID), may be absent in JSON */
+  source_id?: string | null
+  /** Subagent instance ID if from a subagent, may be absent in JSON */
+  agent_id?: string | null
+  /** Subagent type if from a subagent, may be absent in JSON */
+  subagent_type?: string | null
+  /** Human-readable source description, may be absent in JSON */
+  source_description?: string | null
 }
 ```
 
 **Response format**
+
+::: info Changed
+Changed in Wire 1.6. Added optional `feedback` field.
+:::
 
 Client needs to return `ApprovalResponse` as the response result:
 
@@ -750,6 +862,8 @@ Client needs to return `ApprovalResponse` as the response result:
 interface ApprovalResponse {
   request_id: string
   response: "approve" | "approve_for_session" | "reject"
+  /** Optional feedback text when rejecting, may be absent in JSON */
+  feedback?: string
 }
 ```
 
@@ -757,7 +871,7 @@ interface ApprovalResponse {
 |----------|-------------|
 | `approve` | Approve this operation |
 | `approve_for_session` | Approve similar operations for this session |
-| `reject` | Reject operation |
+| `reject` | Reject operation; optionally include `feedback` to instruct the model on what to do instead |
 
 ### `ToolCallRequest`
 
@@ -853,6 +967,46 @@ If the client does not support structured questions or the user dismisses the qu
 
 ```json
 {"jsonrpc": "2.0", "id": "b1a2c3d4-e5f6-7890-abcd-ef1234567890", "result": {"request_id": "q-1", "answers": {}}}
+```
+
+### `HookRequest`
+
+::: info Added
+Added in Wire 1.7.
+:::
+
+Hook handling request, sent via `request` method. When a Wire client subscribes to hook events, the server sends this request to let the client handle the hook logic and return an allow/block decision.
+
+This feature requires capability negotiation: the server only sends corresponding `HookRequest` messages after the client declares subscriptions via `hooks` in `initialize`.
+
+```typescript
+interface HookRequest {
+  /** Request ID, used when responding */
+  id: string
+  /** Subscription ID, identifies which subscription triggered this request */
+  subscription_id: string
+  /** Hook event type, e.g., 'PreToolUse', 'Stop' */
+  event: string
+  /** Target that triggered the hook: tool name, agent name, etc. */
+  target: string
+  /** Full event payload (same as what shell hooks receive on stdin) */
+  input_data: object
+}
+```
+
+**Response format**
+
+The client should return a `HookResponse` as the response result:
+
+```typescript
+interface HookResponse {
+  /** Corresponding request ID */
+  request_id: string
+  /** Decision: allow or block */
+  action: "allow" | "block"
+  /** Reason for blocking */
+  reason: string
+}
 ```
 
 ### `DisplayBlock`

@@ -28,9 +28,11 @@ The configuration file contains the following top-level configuration items:
 | `default_thinking` | `boolean` | Whether to enable thinking mode by default (defaults to `false`) |
 | `default_yolo` | `boolean` | Whether to enable YOLO (auto-approve) mode by default (defaults to `false`) |
 | `default_editor` | `string` | Default external editor command (e.g. `"vim"`, `"code --wait"`), auto-detects when empty |
+| `theme` | `string` | Terminal color theme, either `"dark"` or `"light"` (defaults to `"dark"`) |
 | `providers` | `table` | API provider configuration |
 | `models` | `table` | Model configuration |
 | `loop_control` | `table` | Agent loop control parameters |
+| `background` | `table` | Background task runtime parameters |
 | `services` | `table` | External service configuration (search, fetch) |
 | `mcp` | `table` | MCP client configuration |
 
@@ -41,6 +43,7 @@ default_model = "kimi-for-coding"
 default_thinking = false
 default_yolo = false
 default_editor = ""
+theme = "dark"
 
 [providers.kimi-for-coding]
 type = "kimi"
@@ -58,6 +61,11 @@ max_retries_per_step = 3
 max_ralph_iterations = 0
 reserved_context_size = 50000
 compaction_trigger_ratio = 0.85
+
+[background]
+max_running_tasks = 4
+keep_alive_on_exit = false
+agent_task_timeout_s = 900
 
 [services.moonshot_search]
 base_url = "https://api.kimi.com/coding/v1/search"
@@ -126,6 +134,16 @@ capabilities = ["thinking", "image_in"]
 | `reserved_context_size` | `integer` | `50000` | Reserved token count for LLM response generation; auto-compaction triggers when `context_tokens + reserved_context_size >= max_context_size` |
 | `compaction_trigger_ratio` | `float` | `0.85` | Context usage ratio threshold for auto-compaction (0.5–0.99); auto-compaction triggers when `context_tokens >= max_context_size * compaction_trigger_ratio`, whichever condition is met first with `reserved_context_size` |
 
+### `background`
+
+`background` controls background task runtime behavior. Background tasks are launched via the `Shell` tool or the `Agent` tool with `run_in_background=true`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `max_running_tasks` | `integer` | `4` | Maximum number of concurrent background tasks |
+| `keep_alive_on_exit` | `boolean` | `false` | Whether to keep background tasks running when CLI exits; default is to terminate all background tasks on exit |
+| `agent_task_timeout_s` | `integer` | `900` | Maximum runtime in seconds for a background agent task; timed-out tasks are marked as failed and the main agent is notified |
+
 ### `services`
 
 `services` configures external services used by Kimi Code CLI.
@@ -161,6 +179,32 @@ When configuring the Kimi Code platform using the `/login` command, search and f
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `client.tool_call_timeout_ms` | `integer` | `60000` | MCP tool call timeout (milliseconds) |
+
+### `hooks`
+
+`hooks` configures lifecycle hooks (Beta feature). See [Hooks](../customization/hooks.md) for details.
+
+Use the `[[hooks]]` array syntax to define multiple hooks:
+
+```toml
+[[hooks]]
+event = "PreToolUse"
+matcher = "Shell"
+command = ".kimi/hooks/safety-check.sh"
+timeout = 10
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "WriteFile"
+command = "prettier --write"
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `event` | `string` | Yes | Event type, e.g., `PreToolUse`, `Stop`, etc. |
+| `command` | `string` | Yes | Shell command to execute |
+| `matcher` | `string` | No | Regex filter condition |
+| `timeout` | `integer` | No | Timeout in seconds, default 30 |
 
 ## JSON configuration migration
 

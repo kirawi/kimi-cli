@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import dataclasses
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +27,7 @@ from kimi_cli.utils.aioqueue import QueueShutDown
 from kimi_cli.utils.logging import logger, redirect_stderr_to_logger
 from kimi_cli.utils.path import shorten_home
 from kimi_cli.wire import Wire, WireUISide
-from kimi_cli.wire.types import ContentPart, WireMessage
+from kimi_cli.wire.types import ApprovalRequest, ApprovalResponse, ContentPart, WireMessage
 
 if TYPE_CHECKING:
     from fastmcp.mcp_config import MCPConfig
@@ -52,6 +52,24 @@ def enable_logging(debug: bool = False, *, redirect_stderr: bool = True) -> None
         redirect_stderr_to_logger()
 
 
+def _cleanup_stale_foreground_subagents(runtime: Runtime) -> None:
+    subagent_store = getattr(runtime, "subagent_store", None)
+    if subagent_store is None:
+        return
+
+    stale_agent_ids = [
+        record.agent_id
+        for record in subagent_store.list_instances()
+        if record.status == "running_foreground"
+    ]
+    for agent_id in stale_agent_ids:
+        logger.warning(
+            "Marking stale foreground subagent instance as failed during startup: {agent_id}",
+            agent_id=agent_id,
+        )
+        subagent_store.update_instance(agent_id, status="failed")
+
+
 class KimiCLI:
     @staticmethod
     async def create(
@@ -66,11 +84,13 @@ class KimiCLI:
         # Extensions
         agent_file: Path | None = None,
         mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
-        skills_dir: KaosPath | None = None,
+        skills_dirs: list[KaosPath] | None = None,
         # Loop control
         max_steps_per_turn: int | None = None,
         max_retries_per_step: int | None = None,
         max_ralph_iterations: int | None = None,
+        startup_progress: Callable[[str], None] | None = None,
+        defer_mcp_loading: bool = False,
     ) -> KimiCLI:
         """
         Create a KimiCLI instance.
@@ -85,14 +105,18 @@ class KimiCLI:
             agent_file (Path | None, optional): Path to the agent file. Defaults to None.
             mcp_configs (list[MCPConfig | dict[str, Any]] | None, optional): MCP configs to load
                 MCP tools from. Defaults to None.
-            skills_dir (KaosPath | None, optional): Override skills directory discovery. Defaults
-                to None.
+            skills_dirs (list[KaosPath] | None, optional): Custom skills directories that
+                override default user/project discovery. Defaults to None.
             max_steps_per_turn (int | None, optional): Maximum number of steps in one turn.
                 Defaults to None.
             max_retries_per_step (int | None, optional): Maximum number of retries in one step.
                 Defaults to None.
             max_ralph_iterations (int | None, optional): Extra iterations after the first turn in
                 Ralph mode. Defaults to None.
+            startup_progress (Callable[[str], None] | None, optional): Progress callback used by
+                interactive startup UI. Defaults to None.
+            defer_mcp_loading (bool, optional): Defer MCP startup until the interactive shell is
+                ready. Defaults to False.
 
         Raises:
             FileNotFoundError: When the agent file is not found.
@@ -105,6 +129,9 @@ class KimiCLI:
             MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be
                 connected.
         """
+        if startup_progress is not None:
+            startup_progress("Loading configuration...")
+
         config = config if isinstance(config, Config) else load_config(config)
         if max_steps_per_turn is not None:
             config.loop_control.max_steps_per_turn = max_steps_per_turn
@@ -156,12 +183,49 @@ class KimiCLI:
             logger.info("Using LLM model: {model}", model=model)
             logger.info("Thinking mode: {thinking}", thinking=thinking)
 
-        runtime = await Runtime.create(config, oauth, llm, session, yolo, skills_dir)
+        if startup_progress is not None:
+            startup_progress("Scanning workspace...")
+
+        runtime = await Runtime.create(
+            config,
+            oauth,
+            llm,
+            session,
+            yolo,
+            skills_dirs=skills_dirs,
+        )
+        runtime.notifications.recover()
+        runtime.background_tasks.reconcile()
+        _cleanup_stale_foreground_subagents(runtime)
+
+        # Refresh plugin configs with fresh credentials (e.g. OAuth tokens)
+        try:
+            from kimi_cli.plugin.manager import (
+                collect_host_values,
+                get_plugins_dir,
+                refresh_plugin_configs,
+            )
+
+            host_values = collect_host_values(config, oauth)
+            if host_values.get("api_key"):
+                refresh_plugin_configs(get_plugins_dir(), host_values)
+        except Exception:
+            logger.debug("Failed to refresh plugin configs, skipping")
 
         if agent_file is None:
             agent_file = DEFAULT_AGENT_FILE
-        agent = await load_agent(agent_file, runtime, mcp_configs=mcp_configs or [])
+        if startup_progress is not None:
+            startup_progress("Loading agent...")
 
+        agent = await load_agent(
+            agent_file,
+            runtime,
+            mcp_configs=mcp_configs or [],
+            start_mcp_loading=not defer_mcp_loading,
+        )
+
+        if startup_progress is not None:
+            startup_progress("Restoring conversation...")
         context = Context(session.context_file)
         await context.restore()
 
@@ -171,6 +235,14 @@ class KimiCLI:
             await context.write_system_prompt(agent.system_prompt)
 
         soul = KimiSoul(agent, context=context)
+
+        # Create and inject hook engine
+        from kimi_cli.hooks.engine import HookEngine
+
+        hook_engine = HookEngine(config.hooks, cwd=str(session.work_dir))
+        soul.set_hook_engine(hook_engine)
+        runtime.hook_engine = hook_engine
+
         return KimiCLI(soul, runtime, env_overrides)
 
     def __init__(
@@ -192,6 +264,14 @@ class KimiCLI:
     def session(self) -> Session:
         """Get the Session instance."""
         return self._runtime.session
+
+    def shutdown_background_tasks(self) -> None:
+        """Kill active background tasks on exit, unless keep_alive_on_exit is configured."""
+        if self._runtime.config.background.keep_alive_on_exit:
+            return
+        killed = self._runtime.background_tasks.kill_all_active(reason="CLI session ended")
+        if killed:
+            logger.info("Stopped {n} background task(s) on exit: {ids}", n=len(killed), ids=killed)
 
     @contextlib.asynccontextmanager
     async def _env(self) -> AsyncGenerator[None]:
@@ -232,13 +312,104 @@ class KimiCLI:
         async with self._env():
             wire_future = asyncio.Future[WireUISide]()
             stop_ui_loop = asyncio.Event()
+            approval_bridge_tasks: dict[str, asyncio.Task[None]] = {}
+            forwarded_approval_requests: dict[str, ApprovalRequest] = {}
+
+            async def _bridge_approval_request(request: ApprovalRequest) -> None:
+                try:
+                    response = await request.wait()
+                    assert self._runtime.approval_runtime is not None
+                    self._runtime.approval_runtime.resolve(
+                        request.id, response, feedback=request.feedback
+                    )
+                finally:
+                    approval_bridge_tasks.pop(request.id, None)
+                    forwarded_approval_requests.pop(request.id, None)
+
+            def _forward_approval_request(wire: Wire, request: ApprovalRequest) -> None:
+                if request.id in forwarded_approval_requests:
+                    return
+                forwarded_approval_requests[request.id] = request
+                if request.id not in approval_bridge_tasks:
+                    approval_bridge_tasks[request.id] = asyncio.create_task(
+                        _bridge_approval_request(request)
+                    )
+                wire.soul_side.send(request)
 
             async def _ui_loop_fn(wire: Wire) -> None:
                 wire_future.set_result(wire.ui_side(merge=merge_wire_messages))
-                await stop_ui_loop.wait()
+                assert self._runtime.root_wire_hub is not None
+                assert self._runtime.approval_runtime is not None
+                root_hub_queue = self._runtime.root_wire_hub.subscribe()
+                stop_task = asyncio.create_task(stop_ui_loop.wait())
+                queue_task = asyncio.create_task(root_hub_queue.get())
+                try:
+                    for pending in self._runtime.approval_runtime.list_pending():
+                        _forward_approval_request(
+                            wire,
+                            ApprovalRequest(
+                                id=pending.id,
+                                tool_call_id=pending.tool_call_id,
+                                sender=pending.sender,
+                                action=pending.action,
+                                description=pending.description,
+                                display=pending.display,
+                                source_kind=pending.source.kind,
+                                source_id=pending.source.id,
+                                agent_id=pending.source.agent_id,
+                                subagent_type=pending.source.subagent_type,
+                            ),
+                        )
+                    while True:
+                        done, _ = await asyncio.wait(
+                            [stop_task, queue_task],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if stop_task in done:
+                            break
+                        try:
+                            msg = queue_task.result()
+                        except QueueShutDown:
+                            break
+                        match msg:
+                            case ApprovalRequest() as request:
+                                _forward_approval_request(wire, request)
+                                queue_task = asyncio.create_task(root_hub_queue.get())
+                                continue
+                            case ApprovalResponse() as response:
+                                if (
+                                    request := forwarded_approval_requests.get(response.request_id)
+                                ) and not request.resolved:
+                                    request.resolve(response.response, response.feedback)
+                            case _:
+                                pass
+                        wire.soul_side.send(msg)
+                        queue_task = asyncio.create_task(root_hub_queue.get())
+                finally:
+                    stop_task.cancel()
+                    queue_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stop_task
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await queue_task
+                    for task in list(approval_bridge_tasks.values()):
+                        task.cancel()
+                    for task in list(approval_bridge_tasks.values()):
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                    approval_bridge_tasks.clear()
+                    forwarded_approval_requests.clear()
+                    assert self._runtime.root_wire_hub is not None
+                    self._runtime.root_wire_hub.unsubscribe(root_hub_queue)
 
             soul_task = asyncio.create_task(
-                run_soul(self.soul, user_input, _ui_loop_fn, cancel_event)
+                run_soul(
+                    self.soul,
+                    user_input,
+                    _ui_loop_fn,
+                    cancel_event,
+                    runtime=self._runtime,
+                )
             )
 
             try:
@@ -321,9 +492,8 @@ class KimiCLI:
             WelcomeInfoItem(
                 name="\nTip",
                 value=(
-                    "Kimi Code Web UI, a GUI version of Kimi Code, is now in technical preview."
-                    "\n"
-                    "     Type /web to switch, or next time run `kimi web` directly."
+                    "Spot a bug or have feedback? Type /feedback right in this session"
+                    " — every report makes Kimi better."
                 ),
                 level=WelcomeInfoItem.Level.INFO,
             )
@@ -339,7 +509,7 @@ class KimiCLI:
         command: str | None = None,
         *,
         final_only: bool = False,
-    ) -> bool:
+    ) -> int:
         """Run the Kimi Code CLI instance with print UI."""
         from kimi_cli.ui.print import Print
 

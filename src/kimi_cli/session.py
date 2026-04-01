@@ -37,7 +37,7 @@ class Session:
 
     # session state
     state: SessionState
-    """Persisted session state (approval, dynamic subagents, etc.)."""
+    """Persisted session state (approval settings, plan mode, workspace scope, etc.)."""
 
     # refreshable metadata
     title: str
@@ -52,6 +52,13 @@ class Session:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @property
+    def subagents_dir(self) -> Path:
+        """The absolute path of the subagent instances directory."""
+        path = self.dir / "subagents"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def is_empty(self) -> bool:
         """Whether the session has any context history."""
         if not self.wire_file.is_empty():
@@ -62,7 +69,7 @@ class Session:
                     line = line.strip()
                     if not line:
                         continue
-                    role = json.loads(line).get("role")
+                    role = json.loads(line, strict=False).get("role")
                     if isinstance(role, str) and not role.startswith("_"):
                         return False
         except FileNotFoundError:

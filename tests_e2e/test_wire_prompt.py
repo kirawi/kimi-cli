@@ -90,6 +90,7 @@ def test_basic_prompt_events(tmp_path) -> None:
                         },
                         "message_id": "scripted-1",
                         "plan_mode": False,
+                        "mcp_status": None,
                     },
                 },
                 {"method": "event", "type": "TurnEnd", "payload": {}},
@@ -293,6 +294,7 @@ def test_max_steps_reached(tmp_path) -> None:
                         "token_usage": None,
                         "message_id": None,
                         "plan_mode": False,
+                        "mcp_status": None,
                     },
                 },
                 {
@@ -369,6 +371,7 @@ def test_status_update_fields(tmp_path) -> None:
                     },
                     "message_id": "scripted-1",
                     "plan_mode": False,
+                    "mcp_status": None,
                 },
             }
         )
@@ -466,6 +469,7 @@ def test_concurrent_prompt_error(tmp_path) -> None:
                         "token_usage": None,
                         "message_id": None,
                         "plan_mode": False,
+                        "mcp_status": None,
                     },
                 },
                 {
@@ -477,13 +481,18 @@ def test_concurrent_prompt_error(tmp_path) -> None:
                         "sender": "Shell",
                         "action": "run command",
                         "description": "Run command `echo hi`",
+                        "source_kind": "foreground_turn",
+                        "source_id": "<uuid>",
+                        "agent_id": None,
+                        "subagent_type": None,
+                        "source_description": None,
                         "display": [{"type": "shell", "language": "bash", "command": "echo hi"}],
                     },
                 },
                 {
                     "method": "event",
                     "type": "ApprovalResponse",
-                    "payload": {"request_id": "<uuid>", "response": "approve"},
+                    "payload": {"request_id": "<uuid>", "response": "approve", "feedback": ""},
                 },
                 {
                     "method": "event",
@@ -515,6 +524,7 @@ def test_concurrent_prompt_error(tmp_path) -> None:
                         "token_usage": None,
                         "message_id": None,
                         "plan_mode": False,
+                        "mcp_status": None,
                     },
                 },
                 {"method": "event", "type": "TurnEnd", "payload": {}},

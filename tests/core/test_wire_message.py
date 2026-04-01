@@ -16,6 +16,10 @@ from kimi_cli.wire.types import (
     ImageURLPart,
     MCPLoadingBegin,
     MCPLoadingEnd,
+    MCPServerSnapshot,
+    MCPStatusSnapshot,
+    Notification,
+    PlanDisplay,
     QuestionItem,
     QuestionOption,
     QuestionRequest,
@@ -126,7 +130,16 @@ async def test_wire_message_serde():
     assert serialize_wire_message(msg) == snapshot({"type": "MCPLoadingEnd", "payload": {}})
     _test_serde(msg)
 
-    msg = StatusUpdate(context_usage=0.5)
+    msg = StatusUpdate(
+        context_usage=0.5,
+        mcp_status=MCPStatusSnapshot(
+            loading=True,
+            connected=0,
+            total=1,
+            tools=0,
+            servers=(MCPServerSnapshot(name="context7", status="connecting"),),
+        ),
+    )
     assert serialize_wire_message(msg) == snapshot(
         {
             "type": "StatusUpdate",
@@ -137,6 +150,65 @@ async def test_wire_message_serde():
                 "token_usage": None,
                 "message_id": None,
                 "plan_mode": None,
+                "mcp_status": {
+                    "loading": True,
+                    "connected": 0,
+                    "total": 1,
+                    "tools": 0,
+                    "servers": [
+                        {
+                            "name": "context7",
+                            "status": "connecting",
+                            "tools": [],
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    _test_serde(msg)
+
+    msg = Notification(
+        id="n1234567",
+        category="task",
+        type="task.completed",
+        source_kind="background_task",
+        source_id="b1234567",
+        title="Background task completed",
+        body="Task ID: b1234567",
+        severity="success",
+        created_at=123.456,
+        payload={"task_id": "b1234567"},
+    )
+    assert serialize_wire_message(msg) == snapshot(
+        {
+            "type": "Notification",
+            "payload": {
+                "id": "n1234567",
+                "category": "task",
+                "type": "task.completed",
+                "source_kind": "background_task",
+                "source_id": "b1234567",
+                "title": "Background task completed",
+                "body": "Task ID: b1234567",
+                "severity": "success",
+                "created_at": 123.456,
+                "payload": {"task_id": "b1234567"},
+            },
+        }
+    )
+    _test_serde(msg)
+
+    msg = PlanDisplay(
+        content="## Plan\n\n1. Step one\n2. Step two",
+        file_path="/Users/test/.kimi/plans/iron-man-spider-man.md",
+    )
+    assert serialize_wire_message(msg) == snapshot(
+        {
+            "type": "PlanDisplay",
+            "payload": {
+                "content": "## Plan\n\n1. Step one\n2. Step two",
+                "file_path": "/Users/test/.kimi/plans/iron-man-spider-man.md",
             },
         }
     )
@@ -216,25 +288,44 @@ async def test_wire_message_serde():
     assert serialize_wire_message(msg) == snapshot(
         {
             "type": "ApprovalResponse",
-            "payload": {"request_id": "request_123", "response": "approve"},
+            "payload": {"request_id": "request_123", "response": "approve", "feedback": ""},
         }
     )
     _test_serde(msg)
 
     msg = SubagentEvent(
-        task_tool_call_id="task_789",
+        parent_tool_call_id="call_parent_789",
+        agent_id="a1234567",
+        subagent_type="coder",
         event=StepBegin(n=2),
     )
     assert serialize_wire_message(msg) == snapshot(
         {
             "type": "SubagentEvent",
             "payload": {
-                "task_tool_call_id": "task_789",
+                "parent_tool_call_id": "call_parent_789",
+                "agent_id": "a1234567",
+                "subagent_type": "coder",
                 "event": {"type": "StepBegin", "payload": {"n": 2}},
             },
         }
     )
     _test_serde(msg)
+
+    legacy_msg = deserialize_wire_message(
+        {
+            "type": "SubagentEvent",
+            "payload": {
+                "task_tool_call_id": "call_parent_legacy",
+                "event": {"type": "StepBegin", "payload": {"n": 3}},
+            },
+        }
+    )
+    assert isinstance(legacy_msg, SubagentEvent)
+    assert legacy_msg.parent_tool_call_id == "call_parent_legacy"
+    assert legacy_msg.agent_id is None
+    assert legacy_msg.subagent_type is None
+    assert legacy_msg.event == StepBegin(n=3)
 
     with pytest.raises(ValueError):
         ApprovalResponse(request_id="request_123", response="invalid_response")  # type: ignore
@@ -255,6 +346,11 @@ async def test_wire_message_serde():
                 "sender": "bash",
                 "action": "Execute dangerous command",
                 "description": "This command will delete files",
+                "source_kind": None,
+                "source_id": None,
+                "agent_id": None,
+                "subagent_type": None,
+                "source_description": None,
                 "display": [],
             },
         }
@@ -395,6 +491,21 @@ async def test_type_inspection():
     assert is_event(msg)
     assert not is_request(msg)
 
+    msg = Notification(
+        id="n1234567",
+        category="system",
+        type="system.info",
+        source_kind="test",
+        source_id="source-1",
+        title="Info",
+        body="body",
+        severity="info",
+        created_at=1.0,
+    )
+    assert is_wire_message(msg)
+    assert is_event(msg)
+    assert not is_request(msg)
+
     msg = TextPart(text="Hello world")
     assert is_wire_message(msg)
     assert is_event(msg)
@@ -494,7 +605,17 @@ def test_wire_message_type_alias():
 
     module = kimi_cli.wire.types
     # Helper types that are BaseModel subclasses but not WireMessage types
-    _NON_WIRE_TYPES = {WireMessageEnvelope, QuestionOption, QuestionItem, QuestionResponse}
+    from kimi_cli.wire.types import HookResponse
+
+    _NON_WIRE_TYPES = {
+        WireMessageEnvelope,
+        MCPServerSnapshot,
+        MCPStatusSnapshot,
+        QuestionOption,
+        QuestionItem,
+        QuestionResponse,
+        HookResponse,
+    }
 
     wire_message_types = {
         obj

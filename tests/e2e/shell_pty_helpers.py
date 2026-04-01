@@ -23,7 +23,7 @@ from tests_e2e.wire_helpers import make_home_dir as _make_home_dir
 from tests_e2e.wire_helpers import make_work_dir as _make_work_dir
 from tests_e2e.wire_helpers import write_scripted_config as write_scripted_config
 
-DEFAULT_TIMEOUT = 10.0
+DEFAULT_TIMEOUT = 15.0
 PROMPT_SYMBOL = "✨"
 OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -140,10 +140,13 @@ class ShellPTYProcess:
             "enter": b"\r",
             "escape": b"\x1b",
             "tab": b"\t",
+            "s_tab": b"\x1b[Z",
             "up": b"\x1b[A",
             "down": b"\x1b[B",
             "left": b"\x1b[D",
             "right": b"\x1b[C",
+            "ctrl_c": b"\x03",
+            "ctrl_d": b"\x04",
             "ctrl_x": b"\x18",
         }
         payload = key_map.get(key)
