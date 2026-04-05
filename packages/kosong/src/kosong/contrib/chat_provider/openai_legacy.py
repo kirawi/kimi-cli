@@ -215,6 +215,14 @@ class OpenAILegacy:
         dumped_message = message.model_dump(exclude_none=True)
         if reasoning_content and self._reasoning_key:
             dumped_message[self._reasoning_key] = reasoning_content
+        # Strip provider-specific fields that non-Kimi APIs don't accept
+        content = dumped_message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    iu = part.get("image_url")
+                    if isinstance(iu, dict) and "id" in iu and iu["id"] is None:
+                        del iu["id"]
         return cast(ChatCompletionMessageParam, dumped_message)
 
 

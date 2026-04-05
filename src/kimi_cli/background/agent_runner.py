@@ -11,9 +11,9 @@ from kimi_cli.approval_runtime import (
     reset_current_approval_source,
     set_current_approval_source,
 )
-from kimi_cli.soul.context import Context
-from kimi_cli.soul.kimisoul import KimiSoul
+from kimi_cli.soul import RunCancelled
 from kimi_cli.subagents.builder import SubagentBuilder
+from kimi_cli.subagents.core import SubagentRunSpec, prepare_soul
 from kimi_cli.subagents.output import SubagentOutputWriter
 from kimi_cli.subagents.runner import run_with_summary_continuation
 from kimi_cli.utils.logging import logger
@@ -37,6 +37,7 @@ class BackgroundAgentRunner:
         prompt: str,
         model_override: str | None,
         timeout_s: int | None = None,
+        resumed: bool = False,
     ) -> None:
         self._runtime = runtime
         self._manager = manager
@@ -46,6 +47,7 @@ class BackgroundAgentRunner:
         self._prompt = prompt
         self._model_override = model_override
         self._timeout_s = timeout_s
+        self._resumed = resumed
         self._builder = SubagentBuilder(runtime)
         self._approval_update_tasks: set[asyncio.Task[None]] = set()
 
@@ -98,6 +100,13 @@ class BackgroundAgentRunner:
             self._manager._mark_task_killed(self._task_id, "Stopped by TaskStop")
             output.stage("cancelled")
             raise
+        except RunCancelled:
+            # RunCancelled is Exception (not BaseException), so re-raising it from
+            # an asyncio.create_task would trigger "Task exception was never retrieved".
+            # Just mark killed and return — cleanup is already done.
+            self._runtime.subagent_store.update_instance(self._agent_id, status="killed")
+            self._manager._mark_task_killed(self._task_id, "Run was cancelled")
+            output.stage("cancelled")
         except Exception as exc:
             logger.exception("Background agent runner failed")
             self._runtime.subagent_store.update_instance(self._agent_id, status="failed")
@@ -118,14 +127,6 @@ class BackgroundAgentRunner:
         assert self._runtime.subagent_store is not None
         self._manager._mark_task_running(self._task_id)
         output.stage("runner_started")
-        self._runtime.subagent_store.prompt_path(self._agent_id).write_text(
-            self._prompt,
-            encoding="utf-8",
-        )
-        self._runtime.subagent_store.update_instance(
-            self._agent_id,
-            status="running_background",
-        )
 
         type_def = self._runtime.labor_market.require_builtin_type(self._subagent_type)
         record = self._runtime.subagent_store.require_instance(self._agent_id)
@@ -136,20 +137,21 @@ class BackgroundAgentRunner:
                 model_override=self._model_override,
                 effective_model=self._model_override,
             )
-        agent = await self._builder.build_builtin_instance(
+
+        spec = SubagentRunSpec(
             agent_id=self._agent_id,
             type_def=type_def,
             launch_spec=launch_spec,
+            prompt=self._prompt,
+            resumed=self._resumed,
         )
-        output.stage("agent_built")
-        context = Context(self._runtime.subagent_store.context_path(self._agent_id))
-        await context.restore()
-        output.stage("context_restored")
-        if context.system_prompt is not None:
-            agent = replace(agent, system_prompt=context.system_prompt)
-        else:
-            await context.write_system_prompt(agent.system_prompt)
-        output.stage("context_ready")
+        soul, prompt = await prepare_soul(
+            spec,
+            self._runtime,
+            self._builder,
+            self._runtime.subagent_store,
+            on_stage=output.stage,
+        )
 
         async def _ui_loop_fn(wire: Wire) -> None:
             wire_ui = wire.ui_side(merge=True)
@@ -157,11 +159,10 @@ class BackgroundAgentRunner:
                 msg = await wire_ui.receive()
                 output.write_wire_message(msg)
 
-        soul = KimiSoul(agent, context=context)
         output.stage("run_soul_start")
         final_response, failure = await run_with_summary_continuation(
             soul,
-            self._prompt,
+            prompt,
             _ui_loop_fn,
             self._runtime.subagent_store.wire_path(self._agent_id),
         )
@@ -172,7 +173,13 @@ class BackgroundAgentRunner:
             return
         output.stage("run_soul_finished")
 
-        assert final_response is not None
+        if final_response is None:
+            self._manager._mark_task_failed(
+                self._task_id, "Agent completed but produced no output."
+            )
+            self._runtime.subagent_store.update_instance(self._agent_id, status="failed")
+            output.stage("failed: empty output")
+            return
         output.summary(final_response)
         self._runtime.subagent_store.update_instance(self._agent_id, status="idle")
         self._manager._mark_task_completed(self._task_id)

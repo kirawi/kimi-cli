@@ -78,7 +78,7 @@ The system prompt file is a Markdown template that can use `${VAR}` syntax to re
 | `${KIMI_NOW}` | Current time (ISO format) |
 | `${KIMI_WORK_DIR}` | Working directory path |
 | `${KIMI_WORK_DIR_LS}` | Working directory file list |
-| `${KIMI_AGENTS_MD}` | AGENTS.md file content (if exists) |
+| `${KIMI_AGENTS_MD}` | Merged `AGENTS.md` content from project root to working directory (including `.kimi/AGENTS.md`) |
 | `${KIMI_SKILLS}` | Loaded skills list |
 | `${KIMI_ADDITIONAL_DIRS_INFO}` | Information about additional directories added via `--add-dir` or `/add-dir` |
 
@@ -215,12 +215,12 @@ When `run_in_background=true`, the command is launched as a background task and 
 ### `ReadFile`
 
 - **Path**: `kimi_cli.tools.file:ReadFile`
-- **Description**: Read text file content. Max 1000 lines per read, max 2000 characters per line. Files outside working directory require absolute paths.
+- **Description**: Read text file content. Max 1000 lines per read, max 2000 characters per line. Files outside working directory require absolute paths. Every read returns the total number of lines in the file.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | File path |
-| `line_offset` | int | Starting line number, default 1 |
+| `line_offset` | int | Starting line number, default 1. Supports negative values to read from the end of the file (e.g. `-100` reads the last 100 lines); absolute value cannot exceed 1000 |
 | `n_lines` | int | Number of lines to read, default/max 1000 |
 
 ### `ReadMediaFile`

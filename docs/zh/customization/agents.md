@@ -78,7 +78,7 @@ agent:
 | `${KIMI_NOW}` | 当前时间（ISO 格式） |
 | `${KIMI_WORK_DIR}` | 工作目录路径 |
 | `${KIMI_WORK_DIR_LS}` | 工作目录文件列表 |
-| `${KIMI_AGENTS_MD}` | AGENTS.md 文件内容（如果存在） |
+| `${KIMI_AGENTS_MD}` | 从项目根目录到工作目录逐层合并的 `AGENTS.md` 内容（包括 `.kimi/AGENTS.md`） |
 | `${KIMI_SKILLS}` | 加载的 Skills 列表 |
 | `${KIMI_ADDITIONAL_DIRS_INFO}` | 通过 `--add-dir` 或 `/add-dir` 添加的额外目录信息 |
 
@@ -215,12 +215,12 @@ agent:
 ### `ReadFile`
 
 - **路径**：`kimi_cli.tools.file:ReadFile`
-- **描述**：读取文本文件内容。单次最多读取 1000 行，每行最多 2000 字符。工作目录外的文件需使用绝对路径。
+- **描述**：读取文本文件内容。单次最多读取 1000 行，每行最多 2000 字符。工作目录外的文件需使用绝对路径。每次读取都会在消息中返回文件总行数。
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `path` | string | 文件路径 |
-| `line_offset` | int | 起始行号，默认 1 |
+| `line_offset` | int | 起始行号，默认 1。支持负数表示从文件末尾读取（如 `-100` 读取最后 100 行），绝对值不超过 1000 |
 | `n_lines` | int | 读取行数，默认/最大 1000 |
 
 ### `ReadMediaFile`

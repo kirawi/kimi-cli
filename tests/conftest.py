@@ -104,6 +104,8 @@ def builtin_args(temp_work_dir: KaosPath) -> BuiltinSystemPromptArgs:
         KIMI_AGENTS_MD="Test agents content",
         KIMI_SKILLS="No skills found.",
         KIMI_ADDITIONAL_DIRS_INFO="",
+        KIMI_OS="macOS",
+        KIMI_SHELL="bash (`/bin/bash`)",
     )
 
 
@@ -247,9 +249,9 @@ def think_tool() -> Think:
 
 
 @pytest.fixture
-def set_todo_list_tool() -> SetTodoList:
+def set_todo_list_tool(runtime: Runtime) -> SetTodoList:
     """Create a SetTodoList tool instance."""
-    return SetTodoList()
+    return SetTodoList(runtime)
 
 
 @pytest.fixture

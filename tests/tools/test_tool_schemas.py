@@ -108,27 +108,32 @@ def test_set_todo_list_params_schema(set_todo_list_tool: SetTodoList):
         {
             "properties": {
                 "todos": {
-                    "description": "The updated todo list",
-                    "items": {
-                        "properties": {
-                            "title": {
-                                "description": "The title of the todo",
-                                "minLength": 1,
-                                "type": "string",
+                    "anyOf": [
+                        {
+                            "items": {
+                                "properties": {
+                                    "title": {
+                                        "description": "The title of the todo",
+                                        "minLength": 1,
+                                        "type": "string",
+                                    },
+                                    "status": {
+                                        "description": "The status of the todo",
+                                        "enum": ["pending", "in_progress", "done"],
+                                        "type": "string",
+                                    },
+                                },
+                                "required": ["title", "status"],
+                                "type": "object",
                             },
-                            "status": {
-                                "description": "The status of the todo",
-                                "enum": ["pending", "in_progress", "done"],
-                                "type": "string",
-                            },
+                            "type": "array",
                         },
-                        "required": ["title", "status"],
-                        "type": "object",
-                    },
-                    "type": "array",
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "The updated todo list. If not provided, returns the current todo list without making changes.",
                 }
             },
-            "required": ["todos"],
             "type": "object",
         }
     )
@@ -140,7 +145,7 @@ def test_shell_params_schema(shell_tool: Shell):
         {
             "properties": {
                 "command": {
-                    "description": "The bash command to execute.",
+                    "description": "The command to execute.",
                     "type": "string",
                 },
                 "timeout": {
@@ -247,8 +252,7 @@ def test_read_file_params_schema(read_file_tool: ReadFile):
                 },
                 "line_offset": {
                     "default": 1,
-                    "description": "The line number to start reading from. By default read from the beginning of the file. Set this when the file is too large to read at once.",
-                    "minimum": 1,
+                    "description": "The line number to start reading from. By default read from the beginning of the file. Set this when the file is too large to read at once. Negative values read from the end of the file (e.g. -100 reads the last 100 lines). The absolute value of negative offset cannot exceed 1000.",
                     "type": "integer",
                 },
                 "n_lines": {
@@ -374,6 +378,11 @@ def test_grep_params_schema(grep_tool: Grep):
                 "multiline": {
                     "default": False,
                     "description": "Enable multiline mode where `.` matches newlines and patterns can span lines (the `-U` and `--multiline-dotall` options). By default, multiline mode is disabled.",
+                    "type": "boolean",
+                },
+                "include_ignored": {
+                    "default": False,
+                    "description": "Include files that are ignored by `.gitignore`, `.ignore`, and other ignore rules. Useful for searching gitignored artifacts such as build outputs (e.g. `dist/`, `build/`) or `node_modules`. Sensitive files (like `.env`) remain filtered by the sensitive-file protection layer. Defaults to false.",
                     "type": "boolean",
                 },
             },
