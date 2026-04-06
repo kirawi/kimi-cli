@@ -67,6 +67,7 @@ class OpenAILegacy:
         frequency_penalty: float | None
         stop: str | list[str] | None
         prompt_cache_key: str | None
+        extra_body: dict[str, Any] | None
 
     def __init__(
         self,
@@ -178,6 +179,15 @@ class OpenAILegacy:
         new_self._generation_kwargs = copy.deepcopy(self._generation_kwargs)
         new_self._generation_kwargs.update(kwargs)
         return new_self
+
+    def with_extra_body(self, extra_body: dict[str, Any]) -> Self:
+        """
+        Copy the chat provider, updating the extra_body in generation kwargs.
+
+        Returns:
+            Self: A new instance of the chat provider with updated extra_body.
+        """
+        return self.with_generation_kwargs(extra_body=extra_body)
 
     @property
     def model_parameters(self) -> dict[str, Any]:

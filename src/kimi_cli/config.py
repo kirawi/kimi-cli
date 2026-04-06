@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 import tomlkit
 from pydantic import (
@@ -47,6 +47,8 @@ class LLMProvider(BaseModel):
     """Custom headers to include in API requests"""
     reasoning_key: str | None = None
     """Custom field key for reasoning content in OpenAI-compatible APIs"""
+    extra_body: dict[str, Any] | None = None
+    """Extra JSON fields to include in the request body (for OpenAI-compatible APIs)"""
     oauth: OAuthRef | None = None
     """OAuth credential reference (do not store tokens here)."""
 

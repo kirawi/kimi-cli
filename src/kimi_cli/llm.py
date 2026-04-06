@@ -150,6 +150,8 @@ def create_llm(
                 api_key=resolved_api_key,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
             )
+            if provider.extra_body:
+                chat_provider = chat_provider.with_extra_body(provider.extra_body)
         case "openai_responses":
             from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
 
