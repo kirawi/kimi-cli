@@ -63,6 +63,9 @@ def extract_key_argument(json_content: str | streamingjson.Lexer, tool_name: str
             if not isinstance(curr_args, dict) or not curr_args.get("path"):
                 return None
             key_argument = _normalize_path(str(curr_args["path"]))
+            n_lines = curr_args.get("n_lines")
+            if n_lines is not None and n_lines != 1000:
+                key_argument += f", head: {n_lines}"
         case "ReadMediaFile":
             if not isinstance(curr_args, dict) or not curr_args.get("path"):
                 return None
@@ -75,6 +78,9 @@ def extract_key_argument(json_content: str | streamingjson.Lexer, tool_name: str
             if not isinstance(curr_args, dict) or not curr_args.get("pattern"):
                 return None
             key_argument = str(curr_args["pattern"])
+            head_limit = curr_args.get("head_limit")
+            if head_limit is not None:
+                key_argument += f", head: {head_limit}"
         case "WriteFile":
             if not isinstance(curr_args, dict) or not curr_args.get("path"):
                 return None

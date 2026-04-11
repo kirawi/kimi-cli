@@ -101,10 +101,10 @@ class Params(BaseModel):
             "Optional: Limit output to first N lines, approximately equivalent to `| head -N`. "
             "Works across all output modes: content (limits output lines), "
             "files_with_matches (limits file paths), count_matches (limits count entries). "
-            "Defaults to 250. "
+            "Defaults to 20. "
             "Pass 0 for unlimited (use sparingly — large result sets waste context)."
         ),
-        default=250,
+        default=20,
         ge=0,
     )
     offset: int = Field(
@@ -447,12 +447,12 @@ class Grep(CallableTool2[Params]):
                 if not output.strip():
                     return ToolError(
                         message=(
-                            f"Grep timed out after {RG_TIMEOUT}s. "
+                            f"SearchText timed out after {RG_TIMEOUT}s. "
                             "Try a more specific path or pattern."
                         ),
-                        brief="Grep timed out",
+                        brief="SearchText timed out",
                     )
-                timeout_msg = f"Grep timed out after {RG_TIMEOUT}s. Partial results returned."
+                timeout_msg = f"SearchText timed out after {RG_TIMEOUT}s. Partial results returned."
                 message = f"{message} {timeout_msg}" if message else timeout_msg
 
             # rg exit codes: 0=matches found, 1=no matches, 2+=error
@@ -571,7 +571,14 @@ class Grep(CallableTool2[Params]):
                 return builder.ok(message=no_match_msg)
 
             builder.write(output)
-            return builder.ok(message=message)
+
+            # Build brief: first ~5 lines of results as a preview
+            brief_lines = lines[:5]
+            brief = "\n".join(brief_lines)
+            if len(lines) > 5:
+                brief += f"\n... ({len(lines)} results)"
+
+            return builder.ok(message=message, brief=brief)
 
         except asyncio.CancelledError:
             raise

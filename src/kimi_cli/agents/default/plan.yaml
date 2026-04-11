@@ -13,6 +13,7 @@ agent:
     Use this agent when the parent agent needs a step-by-step implementation plan, key file identification, and architectural trade-off analysis before code changes are made.
   allowed_tools:
     - "kimi_cli.tools.file:ReadFile"
+    - "kimi_cli.tools.file:ReadDirectory"
     - "kimi_cli.tools.file:ReadMediaFile"
     - "kimi_cli.tools.file:Glob"
     - "kimi_cli.tools.file:Grep"

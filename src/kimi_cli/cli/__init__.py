@@ -217,9 +217,7 @@ def kimi(
         bool,
         typer.Option(
             "--print",
-            help=(
-                "Run in print mode (non-interactive). Note: print mode implicitly adds `--yolo`."
-            ),
+            help="Run in print mode (non-interactive).",
         ),
     ] = False,
     acp_mode: Annotated[
@@ -609,7 +607,7 @@ def kimi(
                 config=config,
                 model_name=model_name,
                 thinking=thinking,
-                yolo=yolo or (ui == "print"),  # print mode implies yolo
+                yolo=yolo,
                 plan_mode=plan,
                 resumed=resumed,
                 agent_file=agent_file,

@@ -138,7 +138,7 @@ def _full_reminder(
         [
             "",
             "Workflow:",
-            "1. Understand — explore the codebase with Glob, Grep, ReadFile",
+            "1. Understand — explore the codebase with FindFiles, SearchText, ReadFile, ReadDirectory",
             "2. Design — converge on the best approach; "
             "consider trade-offs but aim for a single recommendation",
             "3. Review — re-read key files to verify understanding",

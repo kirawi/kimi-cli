@@ -35,6 +35,13 @@ class Params(BaseModel):
         default=MAX_FD,
         ge=1,
     )
+    long: bool = Field(
+        description=(
+            "Optional: If true, show detailed metadata (permissions, owner, group, size, mtime) "
+            "in a long listing format like `ls -l`. By default, only filenames are shown."
+        ),
+        default=False,
+    )
 
 class ReadDirectory(CallableTool2[Params]):
     name: str = "ReadDirectory"
@@ -90,7 +97,7 @@ class ReadDirectory(CallableTool2[Params]):
 
             assert params.n_lines >= 1
             try:
-                entries = os.listdir(p)
+                entries = sorted(os.listdir(p))
             except PermissionError:
                 return ToolError(
                     message=f"Encountered a permission error while trying to read `{params.path}`.",
@@ -100,7 +107,7 @@ class ReadDirectory(CallableTool2[Params]):
             output_entries = []
             max_fd_reached = False
             for entry in entries:
-                if len(output_entries) >= MAX_FD:
+                if len(output_entries) >= params.n_lines:
                     max_fd_reached = True
                     break
 
@@ -132,6 +139,10 @@ class ReadDirectory(CallableTool2[Params]):
                 elif mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
                     # On Windows, Python sets execution bits based on file extension (.exe, .bat, etc)
                     name += "*"
+
+                if not params.long:
+                    output_entries.append(f"{name}\n")
+                    continue
 
                 if IS_WINDOWS:
                     # Windows Format: <DIR/TYPE> [Size] [Time] [Name]
@@ -179,7 +190,7 @@ class ReadDirectory(CallableTool2[Params]):
             message = f"{len(output_entries)} file descriptors read from directory."
 
             if max_fd_reached:
-                message += f" Max of {MAX_FD} file descriptors reached."
+                message += f" Max of {params.n_lines} file descriptors reached."
 
             return ToolOk(
                 output="".join(output_entries),
