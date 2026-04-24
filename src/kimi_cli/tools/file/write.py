@@ -152,12 +152,15 @@ class WriteFile(CallableTool2[Params]):
                 if not result:
                     return result.rejection_error()
 
+            # Trim trailing whitespace from each line
+            trimmed_content = "\n".join(line.rstrip() for line in params.content.split("\n"))
+
             # Write content to file
             match params.mode:
                 case "overwrite":
-                    await p.write_text(params.content)
+                    await p.write_text(trimmed_content)
                 case "append":
-                    await p.append_text(params.content)
+                    await p.append_text(trimmed_content)
 
             # Get file info for success message
             file_size = (await p.stat()).st_size

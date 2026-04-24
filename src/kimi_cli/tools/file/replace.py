@@ -145,6 +145,9 @@ class StrReplaceFile(CallableTool2[Params]):
                     brief="No replacements made",
                 )
 
+            # Trim trailing whitespace from each line
+            content = "\n".join(line.rstrip() for line in content.split("\n"))
+
             diff_blocks: list[DisplayBlock] = await build_diff_blocks(
                 str(p), original_content, content
             )
