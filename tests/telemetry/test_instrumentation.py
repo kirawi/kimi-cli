@@ -34,6 +34,7 @@ def _reset_telemetry_state():
     telemetry_mod._device_id = None
     telemetry_mod._session_id = None
     telemetry_mod._client_info = None
+    telemetry_mod._session_started_sessions.clear()
     telemetry_mod._sink = None
     telemetry_mod._disabled = False
     yield
@@ -41,6 +42,7 @@ def _reset_telemetry_state():
     telemetry_mod._device_id = None
     telemetry_mod._session_id = None
     telemetry_mod._client_info = None
+    telemetry_mod._session_started_sessions.clear()
     telemetry_mod._sink = None
     telemetry_mod._disabled = False
 
@@ -349,6 +351,19 @@ class TestCancelInterrupt:
         event = _collect_events()[-1]
         assert isinstance(event["properties"]["at_step"], int)
 
+    def test_turn_interrupted_includes_mode(self):
+        """turn_interrupted must include mode property (agent or plan)."""
+        track("turn_interrupted", at_step=1, mode="agent")
+        event = _collect_events()[-1]
+        assert event["properties"]["mode"] == "agent"
+
+    def test_turn_started_includes_mode(self):
+        """turn_started must include mode property."""
+        track("turn_started", mode="plan")
+        event = _collect_events()[-1]
+        assert event["event"] == "turn_started"
+        assert event["properties"]["mode"] == "plan"
+
     def test_cancel_and_dismissed_are_distinct(self):
         """cancel and question_dismissed are different events."""
         track("cancel")
@@ -482,21 +497,13 @@ class TestEventPropertyCorrectness:
             event = _collect_events()[-1]
             assert event["properties"]["method"] == method
 
-    def test_tool_error_has_tool_name_and_error_type(self):
-        """tool_error includes tool_name and error_type (Python exception class name)."""
-        track("tool_error", tool_name="Bash", error_type="RuntimeError")
-        event = _collect_events()[-1]
-        assert event["event"] == "tool_error"
-        assert event["properties"]["tool_name"] == "Bash"
-        assert event["properties"]["error_type"] == "RuntimeError"
-
     def test_tool_call_success_has_no_error_type(self):
-        """tool_call success path: tool_name + success=True + duration_ms, no error_type."""
-        track("tool_call", tool_name="ReadFile", success=True, duration_ms=123)
+        """tool_call success path: tool_name + outcome=success + duration_ms, no error_type."""
+        track("tool_call", tool_name="ReadFile", outcome="success", duration_ms=123)
         event = _collect_events()[-1]
         assert event["event"] == "tool_call"
         assert event["properties"]["tool_name"] == "ReadFile"
-        assert event["properties"]["success"] is True
+        assert event["properties"]["outcome"] == "success"
         assert event["properties"]["duration_ms"] == 123
         assert isinstance(event["properties"]["duration_ms"], int)
         assert "error_type" not in event["properties"]
@@ -506,13 +513,20 @@ class TestEventPropertyCorrectness:
         track(
             "tool_call",
             tool_name="Bash",
-            success=False,
+            outcome="error",
             duration_ms=42,
             error_type="TimeoutError",
         )
         event = _collect_events()[-1]
-        assert event["properties"]["success"] is False
+        assert event["properties"]["outcome"] == "error"
         assert event["properties"]["error_type"] == "TimeoutError"
+
+    def test_tool_call_cancelled_has_no_error_type(self):
+        """tool_call cancelled path: outcome=cancelled + duration_ms, no error_type."""
+        track("tool_call", tool_name="Bash", outcome="cancelled", duration_ms=10)
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "cancelled"
+        assert "error_type" not in event["properties"]
 
     def test_oauth_refresh_success_has_no_reason(self):
         """oauth_refresh success: only success=True, no reason field."""
@@ -763,8 +777,8 @@ class TestContextEnrichment:
 # ---------------------------------------------------------------------------
 
 
-class TestClientInfo:
-    """Verify set_client_info and its propagation through sink enrichment."""
+class TestSessionStarted:
+    """Verify session_started attribution and client info handling."""
 
     def _make_sink(self) -> tuple[EventSink, MagicMock]:
         transport = MagicMock(spec=AsyncTransport)
@@ -776,31 +790,14 @@ class TestClientInfo:
         sink.flush_sync()
         return transport.save_to_disk.call_args[0][0][0]
 
-    def test_no_client_info_means_fields_absent(self):
-        """If set_client_info is never called, context has neither field."""
-        sink, transport = self._make_sink()
-        enriched = self._enrich(sink, transport)
-        assert "client_name" not in enriched["context"]
-        assert "client_version" not in enriched["context"]
-
-    def test_set_client_info_populates_both_fields(self):
-        """set_client_info with name+version injects both into context."""
+    def test_context_never_contains_client_info(self):
+        """Client attribution belongs on session_started properties, not context."""
         from kimi_cli.telemetry import set_client_info
 
         set_client_info(name="vscode", version="1.90.0")
         sink, transport = self._make_sink()
         enriched = self._enrich(sink, transport)
-        assert enriched["context"]["client_name"] == "vscode"
-        assert enriched["context"]["client_version"] == "1.90.0"
-
-    def test_set_client_info_name_only_omits_version(self):
-        """When version is None, client_version key is not added."""
-        from kimi_cli.telemetry import set_client_info
-
-        set_client_info(name="zed")
-        sink, transport = self._make_sink()
-        enriched = self._enrich(sink, transport)
-        assert enriched["context"]["client_name"] == "zed"
+        assert "client_name" not in enriched["context"]
         assert "client_version" not in enriched["context"]
 
     def test_set_client_info_empty_name_is_ignored(self):
@@ -809,11 +806,7 @@ class TestClientInfo:
 
         set_client_info(name="cursor", version="0.40.0")
         set_client_info(name="", version="anything")
-        sink, transport = self._make_sink()
-        enriched = self._enrich(sink, transport)
-        # Previous value preserved
-        assert enriched["context"]["client_name"] == "cursor"
-        assert enriched["context"]["client_version"] == "0.40.0"
+        assert telemetry_mod._client_info == ("cursor", "0.40.0")
 
     def test_set_client_info_overwrites_previous(self):
         """Non-empty set_client_info replaces the tuple atomically."""
@@ -821,10 +814,7 @@ class TestClientInfo:
 
         set_client_info(name="vscode", version="1.90.0")
         set_client_info(name="zed", version="0.180.0")
-        sink, transport = self._make_sink()
-        enriched = self._enrich(sink, transport)
-        assert enriched["context"]["client_name"] == "zed"
-        assert enriched["context"]["client_version"] == "0.180.0"
+        assert telemetry_mod._client_info == ("zed", "0.180.0")
 
     def test_client_info_stored_as_tuple(self):
         """_client_info is stored as a tuple so readers never see a half-update."""
@@ -833,17 +823,59 @@ class TestClientInfo:
         set_client_info(name="kimi-web", version="2.0.0")
         assert telemetry_mod._client_info == ("kimi-web", "2.0.0")
 
-    def test_values_pass_through_verbatim(self):
-        """No sanitization: values should reach the backend unchanged."""
-        from kimi_cli.telemetry import set_client_info
+    def test_track_session_started_shell(self):
+        from kimi_cli.telemetry import track_session_started_once
 
-        weird_name = "VS Code\n(Insiders)"
-        weird_version = "1.90.0-beta\ttest"
-        set_client_info(name=weird_name, version=weird_version)
-        sink, transport = self._make_sink()
-        enriched = self._enrich(sink, transport)
-        assert enriched["context"]["client_name"] == weird_name
-        assert enriched["context"]["client_version"] == weird_version
+        set_context(device_id="dev", session_id="sess-shell")
+        track_session_started_once(ui_mode="shell", resumed=False)
+
+        event = _collect_events()[-1]
+        assert event["event"] == "session_started"
+        assert event["properties"]["client_name"] == "shell"
+        assert event["properties"]["client_version"] is None
+        assert event["properties"]["ui_mode"] == "shell"
+        assert event["properties"]["resumed"] is False
+
+    def test_track_session_started_wire_uses_current_client_info(self):
+        from kimi_cli.telemetry import set_client_info, track_session_started_once
+
+        set_context(device_id="dev", session_id="sess-wire")
+        set_client_info(name="kiwi", version="1.2.3")
+        track_session_started_once(ui_mode="wire", resumed=True)
+
+        event = _collect_events()[-1]
+        assert event["event"] == "session_started"
+        assert event["properties"]["client_name"] == "kiwi"
+        assert event["properties"]["client_version"] == "1.2.3"
+        assert event["properties"]["ui_mode"] == "wire"
+        assert event["properties"]["resumed"] is True
+
+    def test_track_session_started_once_per_session(self):
+        from kimi_cli.telemetry import track_session_started_once
+
+        set_context(device_id="dev", session_id="sess-once")
+        track_session_started_once(ui_mode="wire", resumed=False, client_name="kiwi")
+        track_session_started_once(ui_mode="wire", resumed=False, client_name="vscode")
+
+        events = [event for event in _collect_events() if event["event"] == "session_started"]
+        assert len(events) == 1
+        assert events[0]["properties"]["client_name"] == "kiwi"
+
+    def test_track_session_started_explicit_client_info_wins(self):
+        from kimi_cli.telemetry import set_client_info, track_session_started_once
+
+        set_context(device_id="dev", session_id="sess-explicit")
+        set_client_info(name="kiwi", version="1.2.3")
+        track_session_started_once(
+            ui_mode="wire",
+            resumed=False,
+            client_name="kimi-code-for-vs-code",
+            client_version="1.90.0",
+        )
+
+        event = _collect_events()[-1]
+        assert event["properties"]["client_name"] == "kimi-code-for-vs-code"
+        assert event["properties"]["client_version"] == "1.90.0"
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +884,7 @@ class TestClientInfo:
 
 
 class TestCompactionTracking:
-    """compaction_triggered must fire on both success and failure paths."""
+    """compaction_finished / compaction_failed must fire on success / failure paths."""
 
     def _make_soul(self, *, before_tokens: int, estimated_after: int) -> Any:
         """Construct a minimal KimiSoul stub bypassing __init__."""
@@ -896,12 +928,15 @@ class TestCompactionTracking:
         fake_result = MagicMock()
         fake_result.messages = []
         fake_result.estimated_token_count = estimated_after
+        fake_result.usage = None
         soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)
+
+        soul._injection_providers = []
         return soul
 
     @pytest.mark.asyncio
     async def test_auto_compaction_success_emits_event(self):
-        """Auto-triggered success: track has trigger_type=auto + after_tokens + success=True."""
+        """Auto-triggered success: track has trigger_type=auto + after_tokens."""
         soul = self._make_soul(before_tokens=12000, estimated_after=3000)
 
         with (
@@ -912,34 +947,55 @@ class TestCompactionTracking:
 
         # Filter to the compaction event — other events (hook triggers etc.)
         # shouldn't go through telemetry.track.
-        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_triggered"]
+        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_finished"]
         assert len(calls) == 1
         args, kwargs = calls[0]
-        assert args[0] == "compaction_triggered"
+        assert args[0] == "compaction_finished"
         assert kwargs["trigger_type"] == "auto"
         assert kwargs["before_tokens"] == 12000
         assert kwargs["after_tokens"] == 3000
-        assert kwargs["success"] is True
+        assert kwargs["duration_ms"] >= 0
+        assert kwargs["retry_count"] == 0
+        assert "llm_input_tokens" not in kwargs
+        assert "llm_output_tokens" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_manual_compaction_success_emits_event(self):
-        """/compact with instruction yields trigger_type=manual."""
+    async def test_manual_compaction_without_prompt_emits_event(self):
+        """/compact without instruction yields trigger_type=manual."""
         soul = self._make_soul(before_tokens=8000, estimated_after=2000)
 
         with (
             patch("kimi_cli.soul.kimisoul.wire_send"),
             patch("kimi_cli.telemetry.track") as mock_track,
         ):
-            await soul.compact_context(custom_instruction="focus on auth")
+            await soul.compact_context(manual=True)
 
-        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_triggered"]
+        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_finished"]
         assert len(calls) == 1
         assert calls[0][1]["trigger_type"] == "manual"
-        assert calls[0][1]["success"] is True
+        assert calls[0][1]["duration_ms"] >= 0
+        assert calls[0][1]["retry_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_manual_compaction_with_prompt_emits_event(self):
+        """/compact with instruction yields trigger_type=manual-with-prompt."""
+        soul = self._make_soul(before_tokens=8000, estimated_after=2000)
+
+        with (
+            patch("kimi_cli.soul.kimisoul.wire_send"),
+            patch("kimi_cli.telemetry.track") as mock_track,
+        ):
+            await soul.compact_context(manual=True, custom_instruction="focus on auth")
+
+        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_finished"]
+        assert len(calls) == 1
+        assert calls[0][1]["trigger_type"] == "manual-with-prompt"
+        assert calls[0][1]["duration_ms"] >= 0
+        assert calls[0][1]["retry_count"] == 0
 
     @pytest.mark.asyncio
     async def test_compaction_failure_emits_event_then_reraises(self):
-        """On compaction failure: track success=False (no after_tokens), then re-raise."""
+        """On compaction failure: track compaction_failed (no after_tokens), then re-raise."""
         soul = self._make_soul(before_tokens=50000, estimated_after=0)
         # Force the compaction to fail with a non-retryable error
         soul._run_with_connection_recovery = AsyncMock(side_effect=RuntimeError("compaction boom"))
@@ -951,10 +1007,107 @@ class TestCompactionTracking:
         ):
             await soul.compact_context()
 
-        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_triggered"]
+        calls = [c for c in mock_track.call_args_list if c[0][0] == "compaction_failed"]
         assert len(calls) == 1
         kwargs = calls[0][1]
         assert kwargs["trigger_type"] == "auto"
         assert kwargs["before_tokens"] == 50000
-        assert kwargs["success"] is False
         assert "after_tokens" not in kwargs
+        assert kwargs["duration_ms"] >= 0
+        assert kwargs["retry_count"] == 0
+        assert kwargs["error_type"] == "RuntimeError"
+
+
+# ---------------------------------------------------------------------------
+# 8. Plan lifecycle events
+# ---------------------------------------------------------------------------
+
+
+class TestPlanLifecycleEvents:
+    """Verify plan mode telemetry events and their properties."""
+
+    def test_plan_submitted_with_has_options(self):
+        """ExitPlanMode emits plan_submitted with has_options flag."""
+        track("plan_submitted", has_options=True)
+        event = _collect_events()[-1]
+        assert event["event"] == "plan_submitted"
+        assert event["properties"]["has_options"] is True
+
+    def test_plan_submitted_without_options(self):
+        """plan_submitted can have has_options=False."""
+        track("plan_submitted", has_options=False)
+        event = _collect_events()[-1]
+        assert event["properties"]["has_options"] is False
+
+    def test_plan_resolved_approved(self):
+        """Plan approval emits plan_resolved with outcome=approved."""
+        track("plan_resolved", outcome="approved")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "approved"
+
+    def test_plan_resolved_approved_with_chosen_option(self):
+        """Multi-approach plan approval includes chosen_option."""
+        track("plan_resolved", outcome="approved", chosen_option="Refactor (Recommended)")
+        event = _collect_events()[-1]
+        assert event["properties"]["chosen_option"] == "Refactor (Recommended)"
+
+    def test_plan_resolved_rejected(self):
+        """Plan rejection emits plan_resolved with outcome=rejected."""
+        track("plan_resolved", outcome="rejected")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "rejected"
+
+    def test_plan_resolved_rejected_and_exited(self):
+        """Plan reject-and-exit emits plan_resolved with outcome=rejected_and_exited."""
+        track("plan_resolved", outcome="rejected_and_exited")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "rejected_and_exited"
+
+    def test_plan_resolved_auto_approved(self):
+        """AFK auto-approval emits plan_resolved with outcome=auto_approved."""
+        track("plan_resolved", outcome="auto_approved")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "auto_approved"
+
+    def test_plan_resolved_dismissed(self):
+        """Plan dismissal emits plan_resolved with outcome=dismissed."""
+        track("plan_resolved", outcome="dismissed")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "dismissed"
+
+    def test_plan_resolved_revise_with_feedback(self):
+        """Plan revision emits plan_resolved with outcome=revise and has_feedback."""
+        track("plan_resolved", outcome="revise", has_feedback=True)
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "revise"
+        assert event["properties"]["has_feedback"] is True
+
+    def test_plan_resolved_revise_without_feedback(self):
+        """Plan revision without text emits plan_resolved with has_feedback=False."""
+        track("plan_resolved", outcome="revise", has_feedback=False)
+        event = _collect_events()[-1]
+        assert event["properties"]["has_feedback"] is False
+
+    def test_plan_enter_resolved_accepted(self):
+        """User accepting plan mode emits plan_enter_resolved with outcome=accepted."""
+        track("plan_enter_resolved", outcome="accepted")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "accepted"
+
+    def test_plan_enter_resolved_declined(self):
+        """User declining plan mode emits plan_enter_resolved with outcome=declined."""
+        track("plan_enter_resolved", outcome="declined")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "declined"
+
+    def test_plan_enter_resolved_dismissed(self):
+        """User dismissing plan mode dialog emits plan_enter_resolved with outcome=dismissed."""
+        track("plan_enter_resolved", outcome="dismissed")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "dismissed"
+
+    def test_plan_enter_resolved_auto_approved(self):
+        """AFK auto-approving plan mode entry emits plan_enter_resolved with outcome=auto_approved."""
+        track("plan_enter_resolved", outcome="auto_approved")
+        event = _collect_events()[-1]
+        assert event["properties"]["outcome"] == "auto_approved"

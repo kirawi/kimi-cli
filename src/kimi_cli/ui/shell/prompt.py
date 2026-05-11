@@ -66,6 +66,7 @@ from kimi_cli.ui.theme import get_prompt_style, get_toolbar_colors
 from kimi_cli.utils.clipboard import (
     grab_media_from_clipboard,
     is_clipboard_available,
+    is_media_clipboard_available,
 )
 from kimi_cli.utils.logging import logger
 from kimi_cli.utils.slashcmd import SlashCommand
@@ -1215,7 +1216,8 @@ class CustomPromptSession:
         self._last_ui_state: PromptUIState = PromptUIState.NORMAL_INPUT
         self._suspended_buffer_document: Document | None = None
         clipboard_available = is_clipboard_available()
-        self._tips = _build_toolbar_tips(clipboard_available)
+        media_clipboard_available = is_media_clipboard_available()
+        self._tips = _build_toolbar_tips(clipboard_available or media_clipboard_available)
         self._tip_rotation_index: int = random.randrange(len(self._tips)) if self._tips else 0
 
         history_entries = _load_history_entries(self._history_file)
@@ -1475,8 +1477,12 @@ class CustomPromptSession:
         def _(event: KeyPressEvent) -> None:
             self._handle_bracketed_paste(event)
 
+<<<<<<< HEAD
         if is_clipboard_available():
             system_clipboard = PyperclipClipboard()
+=======
+        if clipboard_available or media_clipboard_available:
+>>>>>>> ee850e16b47c936f9e05764437eb9dd970651ff8
 
             @_kb.add("c-v", eager=True)
             def _(event: KeyPressEvent) -> None:
@@ -1485,6 +1491,7 @@ class CustomPromptSession:
                 track("shortcut_paste")
                 if self._try_paste_media(event):
                     return
+<<<<<<< HEAD
                 # Explicitly read from system clipboard for paste
                 clipboard_data = system_clipboard.get_data()
                 if clipboard_data is None:  # type: ignore[reportUnnecessaryComparison]
@@ -1492,6 +1499,23 @@ class CustomPromptSession:
                 event.current_buffer.paste_clipboard_data(clipboard_data)
         else:
             pass
+=======
+                if clipboard_available:
+                    try:
+                        clipboard_data = event.app.clipboard.get_data()
+                    except Exception:
+                        return
+                    if clipboard_data is None:  # type: ignore[reportUnnecessaryComparison]
+                        return
+                    self._insert_pasted_text(event.current_buffer, clipboard_data.text)
+                    event.app.invalidate()
+
+        # Only use PyperclipClipboard when pyperclip actually works.
+        # PromptSession built-in keybindings (ctrl-k, ctrl-w, ctrl-y)
+        # use clipboard without error handling, so a broken clipboard
+        # object would crash the UI.
+        clipboard = PyperclipClipboard() if clipboard_available else None
+>>>>>>> ee850e16b47c936f9e05764437eb9dd970651ff8
 
         self._session = PromptSession[str](
             message=self._render_message,
@@ -1899,7 +1923,13 @@ class CustomPromptSession:
         image files are cached and inserted as placeholders.
         Returns True if any media content was inserted.
         """
-        result = grab_media_from_clipboard()
+        try:
+            result = grab_media_from_clipboard()
+        except Exception:
+            # ImageGrab.grabclipboard() may fail on headless Linux if the
+            # real xclip cannot connect to an X server. Silently ignore so
+            # that the text-paste fallback can still be attempted.
+            return False
         if result is None:
             return False
 
@@ -2098,11 +2128,14 @@ class CustomPromptSession:
             self._tip_rotation_index += 1
             self._last_tip_rotate_time = now
 
-        # Status flags: yolo / plan
+        # Status flags: yolo / afk / plan
         status = self._status_provider()
         if status.yolo_enabled:
             fragments.extend([(tc.yolo_label, "yolo"), ("", "  ")])
             remaining -= 6  # "yolo" = 4, "  " = 2
+        if status.afk_enabled:
+            fragments.extend([(tc.afk_label, "afk"), ("", "  ")])
+            remaining -= 5  # "afk" = 3, "  " = 2
         if status.plan_mode:
             fragments.extend([(tc.plan_label, "plan"), ("", "  ")])
             remaining -= 6

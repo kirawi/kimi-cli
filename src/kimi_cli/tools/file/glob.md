@@ -1,4 +1,8 @@
 Find files and directories using glob patterns. This tool supports standard glob syntax like `*`, `?`, and `**` for recursive searches.
+{% if WINDOWS_PATH_HINT %}
+
+${WINDOWS_PATH_HINT}
+{% endif %}
 
 **When to use:**
 - Prefer calling the `FindFiles` tool over running `find` or `fd` via the `Shell` tool
